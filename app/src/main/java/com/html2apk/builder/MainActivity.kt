@@ -1,336 +1,94 @@
 package com.html2apk.builder
 
-import android.content.ContentResolver
-import android.content.Context
-import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
-import android.provider.OpenableColumns
-import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.html2apk.builder.ui.BuilderViewModel
+import com.html2apk.builder.ui.screen.BuilderScreen
+import com.html2apk.builder.ui.screen.HistoryScreen
+import com.html2apk.builder.ui.screen.SettingsScreen
 import com.html2apk.builder.ui.theme.HTML2APKBuilderTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             HTML2APKBuilderTheme {
-                BuilderScreen()
+                MainScreen()
             }
         }
     }
 }
 
 @Composable
-fun BuilderScreen() {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+private fun MainScreen() {
+    // ViewModel di-scope ke Activity, sehingga state & koneksi Room
+    // bertahan antar tab dan antar rotasi.
+    val viewModel: BuilderViewModel = viewModel()
+    var currentTab by remember { mutableIntStateOf(0) }
 
-    // State file HTML
-    var selectedFileName by remember { mutableStateOf<String?>(null) }
-    var selectedUri by remember { mutableStateOf<Uri?>(null) }
-
-    // State file Ikon
-    var iconUri by remember { mutableStateOf<Uri?>(null) }
-    var iconFileName by remember { mutableStateOf<String?>(null) }
-
-    var isBuilding by remember { mutableStateOf(false) }
-
-    // Identitas aplikasi hasil
-    var appName by remember { mutableStateOf("") }
-    var packageName by remember { mutableStateOf("") }
-
-    // Launcher pilih HTML
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            selectedUri = uri
-            selectedFileName = resolveDisplayName(context, uri)
+    Scaffold(
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = currentTab == 0,
+                    onClick = { currentTab = 0 },
+                    icon = {
+                        Icon(Icons.Default.Home, contentDescription = "Builder")
+                    },
+                    label = { Text("Builder") }
+                )
+                NavigationBarItem(
+                    selected = currentTab == 1,
+                    onClick = { currentTab = 1 },
+                    icon = {
+                        Icon(
+                            Icons.AutoMirrored.Filled.List,
+                            contentDescription = "Riwayat"
+                        )
+                    },
+                    label = { Text("Riwayat") }
+                )
+                NavigationBarItem(
+                    selected = currentTab == 2,
+                    onClick = { currentTab = 2 },
+                    icon = {
+                        Icon(Icons.Default.Settings, contentDescription = "Setelan")
+                    },
+                    label = { Text("Setelan") }
+                )
+            }
         }
-    }
-
-    // Launcher pilih Ikon
-    val iconLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            iconUri = uri
-            iconFileName = resolveDisplayName(context, uri)
-        }
-    }
-
-    Scaffold { innerPadding ->
+    ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 24.dp, vertical = 24.dp)
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Top
-            ) {
-                Text(
-                    text = "HTML2APK Builder",
-                    style = MaterialTheme.typography.titleLarge,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // ── Pilih File HTML ──
-                Button(
-                    onClick = { filePickerLauncher.launch("*/*") },
-                    enabled = !isBuilding,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "Pilih File HTML")
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = selectedFileName ?: "Belum ada file HTML dipilih",
-                    style = MaterialTheme.typography.bodyLarge,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // ── Nama Aplikasi ──
-                OutlinedTextField(
-                    value = appName,
-                    onValueChange = { appName = it },
-                    label = { Text("Nama Aplikasi") },
-                    placeholder = { Text("Aplikasi Keren") },
-                    singleLine = true,
-                    enabled = !isBuilding,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // ── Package Name ──
-                OutlinedTextField(
-                    value = packageName,
-                    onValueChange = { packageName = it },
-                    label = { Text("Package Name") },
-                    placeholder = { Text("com.contoh.app") },
-                    singleLine = true,
-                    enabled = !isBuilding,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // ── Pilih Ikon (PNG) ──
-                Button(
-                    onClick = { iconLauncher.launch("image/png") },
-                    enabled = !isBuilding,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "Pilih Ikon (PNG)")
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = iconFileName ?: "Belum ada ikon dipilih",
-                    style = MaterialTheme.typography.bodyLarge,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // ── Tombol Build ──
-                Button(
-                    onClick = {
-                        val uri = selectedUri ?: return@Button
-                        isBuilding = true
-                        scope.launch {
-                            try {
-                                val signedApk = withContext(Dispatchers.IO) {
-                                    // 1. Salin template.apk ke cache.
-                                    val templateFile = File(context.cacheDir, "template.apk")
-                                    if (templateFile.exists()) templateFile.delete()
-                                    context.assets.open("template.apk").use { input ->
-                                        templateFile.outputStream().use { output ->
-                                            input.copyTo(output)
-                                        }
-                                    }
-
-                                    // 2. Direktori output.
-                                    val outputDir = context.getExternalFilesDir(
-                                        Environment.DIRECTORY_DOWNLOADS
-                                    ) ?: throw IllegalStateException(
-                                        "Direktori unduhan eksternal tidak tersedia"
-                                    )
-                                    outputDir.mkdirs()
-
-                                    // 3. Nilai identitas dengan default jika kosong.
-                                    val finalAppName = appName.ifBlank { "My App" }
-                                    val finalPackageName = packageName.ifBlank {
-                                        "com.html2apk.generated"
-                                    }
-
-                                    // 4. Repack + edit manifest/resources via ARSCLib.
-                                    val unsignedApk = File(outputDir, "output.apk")
-                                    if (unsignedApk.exists() && !unsignedApk.delete()) {
-                                        throw IllegalStateException(
-                                            "Gagal menghapus APK unsigned lama"
-                                        )
-                                    }
-
-                                    // Salin HTML ke cache.
-                                    val htmlFile = copyUriToCache(
-                                        context, uri, "input.html"
-                                    )
-
-                                    // Salin ikon ke cache (jika dipilih).
-                                    val iconFile = if (iconUri != null) {
-                                        copyUriToCache(
-                                            context, iconUri!!, "icon.png"
-                                        )
-                                    } else {
-                                        null
-                                    }
-
-                                    Repacker.repack(
-                                        templateApk = templateFile,
-                                        htmlFile = htmlFile,
-                                        iconFile = iconFile,
-                                        outputApk = unsignedApk,
-                                        newAppName = finalAppName,
-                                        newPackageName = finalPackageName
-                                    )
-
-                                    // 5. Keystore (Level 3).
-                                    val keystoreFile = File(context.cacheDir, "keystore.p12")
-                                    SignerHelper.generateKeystore(keystoreFile)
-
-                                    // 6. Signing (Level 3).
-                                    val signedFile = File(outputDir, "signed_output.apk")
-                                    SignerHelper.signApk(unsignedApk, signedFile, keystoreFile)
-
-                                    // 7. Hapus intermediate unsigned.
-                                    if (unsignedApk.exists()) unsignedApk.delete()
-
-                                    signedFile
-                                }
-
-                                isBuilding = false
-                                val sizeKb = signedApk.length() / 1024
-                                Toast.makeText(
-                                    context,
-                                    "Sukses! APK tersimpan di: ${signedApk.absolutePath} " +
-                                        "(Ukuran: $sizeKb KB)",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } catch (e: Exception) {
-                                isBuilding = false
-                                Toast.makeText(
-                                    context,
-                                    "Gagal build: ${e.message ?: e.javaClass.simpleName}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    },
-                    enabled = !isBuilding && selectedUri != null,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "Mulai Build")
-                }
-            }
-
-            if (isBuilding) {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(48.dp)
-                )
+            when (currentTab) {
+                0 -> BuilderScreen(viewModel = viewModel)
+                1 -> HistoryScreen(viewModel = viewModel)
+                2 -> SettingsScreen()
             }
         }
     }
-}
-
-/**
- * Menyalin konten `content://` URI ke file cache dengan nama tertentu.
- */
-private fun copyUriToCache(context: Context, uri: Uri, targetFileName: String): File {
-    val cacheFile = File(context.cacheDir, targetFileName)
-    if (cacheFile.exists() && !cacheFile.delete()) {
-        throw IllegalStateException("Gagal menghapus cache $targetFileName lama")
-    }
-
-    val inputStream = context.contentResolver.openInputStream(uri)
-        ?: throw IllegalStateException("Gagal membuka file: $uri")
-
-    inputStream.use { input ->
-        cacheFile.outputStream().use { output ->
-            input.copyTo(output)
-        }
-    }
-    return cacheFile
-}
-
-/**
- * Mengambil nama tampilan file dari Uri.
- */
-private fun resolveDisplayName(context: Context, uri: Uri): String {
-    var name = uri.lastPathSegment ?: uri.toString()
-
-    if (uri.scheme == ContentResolver.SCHEME_CONTENT) {
-        context.contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (index >= 0) {
-                    name = cursor.getString(index) ?: name
-                }
-            }
-        }
-    }
-
-    return name
 }
