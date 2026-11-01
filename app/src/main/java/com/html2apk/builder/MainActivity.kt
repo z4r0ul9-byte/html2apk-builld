@@ -62,7 +62,6 @@ fun BuilderScreen() {
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
     var isBuilding by remember { mutableStateOf(false) }
 
-    // File picker (kontrak GetContent) — sesuai Level 1.
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -124,9 +123,8 @@ fun BuilderScreen() {
                         isBuilding = true
                         scope.launch {
                             try {
-                                // Seluruh operasi berat (I/O) dijalankan di Dispatchers.IO.
-                                val outputFile = withContext(Dispatchers.IO) {
-                                    // 1. Salin template.apk dari assets ke cache.
+                                val signedApk = withContext(Dispatchers.IO) {
+                                    // 1. Salin template.apk ke cache.
                                     val templateFile = File(context.cacheDir, "template.apk")
                                     if (templateFile.exists()) templateFile.delete()
                                     context.assets.open("template.apk").use { input ->
@@ -135,43 +133,53 @@ fun BuilderScreen() {
                                         }
                                     }
 
-                                    // 2. Siapkan file output di DIRECTORY_DOWNLOADS (scoped storage).
+                                    // 2. Siapkan direktori output.
                                     val outputDir = context.getExternalFilesDir(
                                         Environment.DIRECTORY_DOWNLOADS
                                     ) ?: throw IllegalStateException(
                                         "Direktori unduhan eksternal tidak tersedia"
                                     )
                                     outputDir.mkdirs()
-                                    val outFile = File(outputDir, "output.apk")
-                                    if (outFile.exists() && !outFile.delete()) {
+
+                                    // 3. Repack template + HTML user.
+                                    val unsignedApk = File(outputDir, "output.apk")
+                                    if (unsignedApk.exists() && !unsignedApk.delete()) {
                                         throw IllegalStateException(
-                                            "Gagal menghapus output lama: ${outFile.absolutePath}"
+                                            "Gagal menghapus APK unsigned lama"
                                         )
                                     }
-
-                                    // 3. Salin HTML (via content URI) ke cache sebagai file nyata.
                                     val htmlFile = copyUriToCache(context, uri)
+                                    Repacker.repack(templateFile, htmlFile, unsignedApk)
 
-                                    // 4. Repack template + HTML user ke output.apk.
-                                    Repacker.repack(templateFile, htmlFile, outFile)
-                                    outFile
+                                    // 4. Generate keystore jika belum ada.
+                                    val keystoreFile = File(context.cacheDir, "keystore.p12")
+                                    SignerHelper.generateKeystore(keystoreFile)
+
+                                    // 5. Sign APK.
+                                    val signedFile = File(outputDir, "signed_output.apk")
+                                    SignerHelper.signApk(unsignedApk, signedFile, keystoreFile)
+
+                                    // 6. Hapus APK unsigned karena sudah tidak diperlukan.
+                                    if (unsignedApk.exists()) {
+                                        unsignedApk.delete()
+                                    }
+
+                                    signedFile
                                 }
 
-                                // Kembali di Main thread: matikan loading + Toast sukses.
                                 isBuilding = false
-                                val sizeKb = outputFile.length() / 1024
+                                val sizeKb = signedApk.length() / 1024
                                 Toast.makeText(
                                     context,
-                                    "Sukses! APK tersimpan di: ${outputFile.absolutePath} " +
-                                        "(Ukuran: $sizeKb KB). Catatan: APK belum di-sign.",
+                                    "Sukses! APK ter-sign tersimpan di: ${signedApk.absolutePath} " +
+                                        "(Ukuran: $sizeKb KB)",
                                     Toast.LENGTH_LONG
                                 ).show()
                             } catch (e: Exception) {
-                                // Handling error: matikan loading + Toast error di Main thread.
                                 isBuilding = false
                                 Toast.makeText(
                                     context,
-                                    "Gagal build: ${e.message ?: e.javaClass.simpleName}",
+                                    "Gagal build/sign: ${e.message ?: e.javaClass.simpleName}",
                                     Toast.LENGTH_LONG
                                 ).show()
                             }
@@ -184,7 +192,6 @@ fun BuilderScreen() {
                 }
             }
 
-            // Loading overlay terpusat saat proses build berjalan.
             if (isBuilding) {
                 CircularProgressIndicator(
                     modifier = Modifier
@@ -196,10 +203,6 @@ fun BuilderScreen() {
     }
 }
 
-/**
- * Menyalin isi `content://` URI ke file cache lokal agar bisa dibaca
- * sebagai `File` oleh Repacker.
- */
 private fun copyUriToCache(context: Context, uri: Uri): File {
     val cacheFile = File(context.cacheDir, "input.html")
     if (cacheFile.exists() && !cacheFile.delete()) {
@@ -217,9 +220,6 @@ private fun copyUriToCache(context: Context, uri: Uri): File {
     return cacheFile
 }
 
-/**
- * Mengambil nama tampilan file dari Uri content provider.
- */
 private fun resolveDisplayName(context: Context, uri: Uri): String {
     var name = uri.lastPathSegment ?: uri.toString()
 
