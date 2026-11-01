@@ -17,7 +17,6 @@ android {
 
     buildTypes {
         release {
-            // Level 1 belum memerlukan minify/obfuscation.
             isMinifyEnabled = false
         }
     }
@@ -36,7 +35,6 @@ android {
     }
 
     composeOptions {
-        // Cocok dengan Kotlin 1.9.22
         kotlinCompilerExtensionVersion = "1.5.8"
     }
 
@@ -57,4 +55,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+
+    // Level 3: library signing resmi dari Android build tools.
+    implementation("com.android.tools.build:apksig:8.2.0")
 }
