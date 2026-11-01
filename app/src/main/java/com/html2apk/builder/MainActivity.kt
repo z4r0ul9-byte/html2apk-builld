@@ -59,20 +59,37 @@ fun BuilderScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // State file HTML
     var selectedFileName by remember { mutableStateOf<String?>(null) }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
+
+    // State file Ikon
+    var iconUri by remember { mutableStateOf<Uri?>(null) }
+    var iconFileName by remember { mutableStateOf<String?>(null) }
+
     var isBuilding by remember { mutableStateOf(false) }
 
-    // Level 4: input identitas aplikasi hasil.
+    // Identitas aplikasi hasil
     var appName by remember { mutableStateOf("") }
     var packageName by remember { mutableStateOf("") }
 
+    // Launcher pilih HTML
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             selectedUri = uri
             selectedFileName = resolveDisplayName(context, uri)
+        }
+    }
+
+    // Launcher pilih Ikon
+    val iconLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            iconUri = uri
+            iconFileName = resolveDisplayName(context, uri)
         }
     }
 
@@ -96,6 +113,7 @@ fun BuilderScreen() {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
+                // ── Pilih File HTML ──
                 Button(
                     onClick = { filePickerLauncher.launch("*/*") },
                     enabled = !isBuilding,
@@ -107,13 +125,14 @@ fun BuilderScreen() {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = selectedFileName ?: "Belum ada file dipilih",
+                    text = selectedFileName ?: "Belum ada file HTML dipilih",
                     style = MaterialTheme.typography.bodyLarge,
                     textAlign = TextAlign.Center
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
+                // ── Nama Aplikasi ──
                 OutlinedTextField(
                     value = appName,
                     onValueChange = { appName = it },
@@ -126,6 +145,7 @@ fun BuilderScreen() {
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // ── Package Name ──
                 OutlinedTextField(
                     value = packageName,
                     onValueChange = { packageName = it },
@@ -136,8 +156,28 @@ fun BuilderScreen() {
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ── Pilih Ikon (PNG) ──
+                Button(
+                    onClick = { iconLauncher.launch("image/png") },
+                    enabled = !isBuilding,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(text = "Pilih Ikon (PNG)")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = iconFileName ?: "Belum ada ikon dipilih",
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center
+                )
+
                 Spacer(modifier = Modifier.height(20.dp))
 
+                // ── Tombol Build ──
                 Button(
                     onClick = {
                         val uri = selectedUri ?: return@Button
@@ -175,10 +215,25 @@ fun BuilderScreen() {
                                             "Gagal menghapus APK unsigned lama"
                                         )
                                     }
-                                    val htmlFile = copyUriToCache(context, uri)
+
+                                    // Salin HTML ke cache.
+                                    val htmlFile = copyUriToCache(
+                                        context, uri, "input.html"
+                                    )
+
+                                    // Salin ikon ke cache (jika dipilih).
+                                    val iconFile = if (iconUri != null) {
+                                        copyUriToCache(
+                                            context, iconUri!!, "icon.png"
+                                        )
+                                    } else {
+                                        null
+                                    }
+
                                     Repacker.repack(
                                         templateApk = templateFile,
                                         htmlFile = htmlFile,
+                                        iconFile = iconFile,
                                         outputApk = unsignedApk,
                                         newAppName = finalAppName,
                                         newPackageName = finalPackageName
@@ -235,16 +290,16 @@ fun BuilderScreen() {
 }
 
 /**
- * Menyalin konten `content://` URI ke file cache agar bisa dibaca sebagai File.
+ * Menyalin konten `content://` URI ke file cache dengan nama tertentu.
  */
-private fun copyUriToCache(context: Context, uri: Uri): File {
-    val cacheFile = File(context.cacheDir, "input.html")
+private fun copyUriToCache(context: Context, uri: Uri, targetFileName: String): File {
+    val cacheFile = File(context.cacheDir, targetFileName)
     if (cacheFile.exists() && !cacheFile.delete()) {
-        throw IllegalStateException("Gagal menghapus cache input lama")
+        throw IllegalStateException("Gagal menghapus cache $targetFileName lama")
     }
 
     val inputStream = context.contentResolver.openInputStream(uri)
-        ?: throw IllegalStateException("Gagal membuka file HTML: $uri")
+        ?: throw IllegalStateException("Gagal membuka file: $uri")
 
     inputStream.use { input ->
         cacheFile.outputStream().use { output ->
