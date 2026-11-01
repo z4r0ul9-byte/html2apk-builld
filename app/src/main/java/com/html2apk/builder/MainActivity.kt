@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,6 +63,10 @@ fun BuilderScreen() {
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
     var isBuilding by remember { mutableStateOf(false) }
 
+    // Level 4: input identitas aplikasi hasil.
+    var appName by remember { mutableStateOf("") }
+    var packageName by remember { mutableStateOf("") }
+
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -76,12 +81,12 @@ fun BuilderScreen() {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 24.dp, vertical = 32.dp)
+                .padding(horizontal = 24.dp, vertical = 24.dp)
         ) {
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                verticalArrangement = Arrangement.Top
             ) {
                 Text(
                     text = "HTML2APK Builder",
@@ -89,15 +94,7 @@ fun BuilderScreen() {
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Text(
-                    text = "Pilih file HTML sebagai sumber aplikasi.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
                     onClick = { filePickerLauncher.launch("*/*") },
@@ -107,7 +104,7 @@ fun BuilderScreen() {
                     Text(text = "Pilih File HTML")
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
                     text = selectedFileName ?: "Belum ada file dipilih",
@@ -115,7 +112,31 @@ fun BuilderScreen() {
                     textAlign = TextAlign.Center
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = appName,
+                    onValueChange = { appName = it },
+                    label = { Text("Nama Aplikasi") },
+                    placeholder = { Text("Aplikasi Keren") },
+                    singleLine = true,
+                    enabled = !isBuilding,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = packageName,
+                    onValueChange = { packageName = it },
+                    label = { Text("Package Name") },
+                    placeholder = { Text("com.contoh.app") },
+                    singleLine = true,
+                    enabled = !isBuilding,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
 
                 Button(
                     onClick = {
@@ -133,7 +154,7 @@ fun BuilderScreen() {
                                         }
                                     }
 
-                                    // 2. Siapkan direktori output.
+                                    // 2. Direktori output.
                                     val outputDir = context.getExternalFilesDir(
                                         Environment.DIRECTORY_DOWNLOADS
                                     ) ?: throw IllegalStateException(
@@ -141,7 +162,13 @@ fun BuilderScreen() {
                                     )
                                     outputDir.mkdirs()
 
-                                    // 3. Repack template + HTML user.
+                                    // 3. Nilai identitas dengan default jika kosong.
+                                    val finalAppName = appName.ifBlank { "My App" }
+                                    val finalPackageName = packageName.ifBlank {
+                                        "com.html2apk.generated"
+                                    }
+
+                                    // 4. Repack + edit manifest/resources via ARSCLib.
                                     val unsignedApk = File(outputDir, "output.apk")
                                     if (unsignedApk.exists() && !unsignedApk.delete()) {
                                         throw IllegalStateException(
@@ -149,20 +176,24 @@ fun BuilderScreen() {
                                         )
                                     }
                                     val htmlFile = copyUriToCache(context, uri)
-                                    Repacker.repack(templateFile, htmlFile, unsignedApk)
+                                    Repacker.repack(
+                                        templateApk = templateFile,
+                                        htmlFile = htmlFile,
+                                        outputApk = unsignedApk,
+                                        newAppName = finalAppName,
+                                        newPackageName = finalPackageName
+                                    )
 
-                                    // 4. Generate keystore jika belum ada.
+                                    // 5. Keystore (Level 3).
                                     val keystoreFile = File(context.cacheDir, "keystore.p12")
                                     SignerHelper.generateKeystore(keystoreFile)
 
-                                    // 5. Sign APK.
+                                    // 6. Signing (Level 3).
                                     val signedFile = File(outputDir, "signed_output.apk")
                                     SignerHelper.signApk(unsignedApk, signedFile, keystoreFile)
 
-                                    // 6. Hapus APK unsigned karena sudah tidak diperlukan.
-                                    if (unsignedApk.exists()) {
-                                        unsignedApk.delete()
-                                    }
+                                    // 7. Hapus intermediate unsigned.
+                                    if (unsignedApk.exists()) unsignedApk.delete()
 
                                     signedFile
                                 }
@@ -171,7 +202,7 @@ fun BuilderScreen() {
                                 val sizeKb = signedApk.length() / 1024
                                 Toast.makeText(
                                     context,
-                                    "Sukses! APK ter-sign tersimpan di: ${signedApk.absolutePath} " +
+                                    "Sukses! APK tersimpan di: ${signedApk.absolutePath} " +
                                         "(Ukuran: $sizeKb KB)",
                                     Toast.LENGTH_LONG
                                 ).show()
@@ -179,7 +210,7 @@ fun BuilderScreen() {
                                 isBuilding = false
                                 Toast.makeText(
                                     context,
-                                    "Gagal build/sign: ${e.message ?: e.javaClass.simpleName}",
+                                    "Gagal build: ${e.message ?: e.javaClass.simpleName}",
                                     Toast.LENGTH_LONG
                                 ).show()
                             }
@@ -203,6 +234,9 @@ fun BuilderScreen() {
     }
 }
 
+/**
+ * Menyalin konten `content://` URI ke file cache agar bisa dibaca sebagai File.
+ */
 private fun copyUriToCache(context: Context, uri: Uri): File {
     val cacheFile = File(context.cacheDir, "input.html")
     if (cacheFile.exists() && !cacheFile.delete()) {
@@ -220,6 +254,9 @@ private fun copyUriToCache(context: Context, uri: Uri): File {
     return cacheFile
 }
 
+/**
+ * Mengambil nama tampilan file dari Uri.
+ */
 private fun resolveDisplayName(context: Context, uri: Uri): String {
     var name = uri.lastPathSegment ?: uri.toString()
 
