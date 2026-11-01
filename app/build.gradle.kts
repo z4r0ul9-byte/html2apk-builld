@@ -59,12 +59,11 @@ dependencies {
     // Signing (Level 3).
     implementation("com.android.tools.build:apksig:8.2.0")
 
-    // Sertifikat self-signed (pengganti sun.security.x509 yang tidak ada di Android).
+    // Sertifikat self-signed (pengganti sun.security.x509).
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.77")
     implementation("org.bouncycastle:bcprov-jdk15to18:1.77")
 
-    // Level 4: ARSCLib untuk mengedit AndroidManifest.xml & resources.arsc.
-    // Jika versi 2.9.2 tidak tersedia di JitPack, gunakan alternatif Maven Central:
-    // implementation("io.github.reandroid:ARSCLib:+")
-    implementation("com.github.reandroid:ARSCLib:2.9.2")
+    // Level 4: ARSCLib — koordinat resmi di Maven Central.
+    // Sumber: https://github.com/reandroid/arsclib (README, baris 20–22).
+    implementation("io.github.reandroid:ARSCLib:+")
 }
