@@ -1,22 +1,16 @@
 package com.html2apk.builder
 
 import com.android.apksig.ApkSigner
-import sun.security.x509.AlgorithmId
-import sun.security.x509.CertificateAlgorithmId
-import sun.security.x509.CertificateIssuerName
-import sun.security.x509.CertificateSerialNumber
-import sun.security.x509.CertificateSubjectName
-import sun.security.x509.CertificateValidity
-import sun.security.x509.CertificateVersion
-import sun.security.x509.CertificateX509Key
-import sun.security.x509.X500Name
-import sun.security.x509.X509CertImpl
-import sun.security.x509.X509CertInfo
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import java.io.File
 import java.math.BigInteger
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
+import java.security.PublicKey
 import java.security.cert.X509Certificate
 import java.util.Date
 import java.util.concurrent.TimeUnit
@@ -24,9 +18,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Helper signing Level 3.
  *
- * Menggunakan `com.android.apksig` (library resmi Android build tools) untuk
- * menandatangani APK, dan `sun.security.x509` (tersedia di runtime Android)
- * untuk membuat sertifikat self-signed tanpa library pihak ketiga.
+ * Menggunakan `com.android.apksig` untuk menandatangani APK dan
+ * `org.bouncycastle` (bcpkix) untuk membuat sertifikat self-signed,
+ * karena paket `sun.security.x509` TIDAK tersedia di runtime Android.
  *
  * Catatan: APK hasil signing dengan kunci debug ini dapat di-install,
  * tetapi TIDAK layak untuk distribusi produksi.
@@ -51,11 +45,10 @@ object SignerHelper {
         keyPairGenerator.initialize(KEY_SIZE)
         val keyPair = keyPairGenerator.generateKeyPair()
 
-        // 2. Bangun sertifikat self-signed memakai sun.security.x509.
+        // 2. Bangun sertifikat self-signed menggunakan BouncyCastle.
         val cert = createSelfSignedCertificate(
             privateKey = keyPair.private,
-            publicKey = keyPair.public,
-            subject = "CN=HTML2APK Builder, O=HTML2APK, C=ID"
+            publicKey = keyPair.public
         )
 
         // 3. Simpan ke PKCS12 keystore.
@@ -121,35 +114,34 @@ object SignerHelper {
     }
 
     /**
-     * Membuat sertifikat X.509 self-signed dari keypair RSA.
-     * Memakai API internal JDK yang tersedia di Android (`sun.security.x509`).
+     * Membuat sertifikat X.509 self-signed dari keypair RSA menggunakan
+     * BouncyCastle (bcpkix), karena `sun.security.x509` tidak tersedia
+     * di Android.
      */
     private fun createSelfSignedCertificate(
         privateKey: PrivateKey,
-        publicKey: java.security.PublicKey,
-        subject: String
+        publicKey: PublicKey
     ): X509Certificate {
-        val dn = X500Name(subject)
-        val serial = BigInteger.valueOf(System.currentTimeMillis())
-        val notBefore = Date(System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1))
-        val notAfter = Date(System.currentTimeMillis() + TimeUnit.DAYS.toMillis(365 * 10))
+        val now = System.currentTimeMillis()
+        val notBefore = Date(now - TimeUnit.DAYS.toMillis(1))
+        val notAfter = Date(now + TimeUnit.DAYS.toMillis(365 * 10))
+        val serial = BigInteger.valueOf(now)
 
-        val certInfo = X509CertInfo()
-        certInfo.set(X509CertInfo.VERSION, CertificateVersion(CertificateVersion.V3))
-        certInfo.set(X509CertInfo.SERIAL_NUMBER, CertificateSerialNumber(serial))
-        certInfo.set(X509CertInfo.SUBJECT, CertificateSubjectName(dn))
-        certInfo.set(X509CertInfo.ISSUER, CertificateIssuerName(dn))
-        certInfo.set(X509CertInfo.VALIDITY, CertificateValidity(notBefore, notAfter))
-        certInfo.set(X509CertInfo.KEY, CertificateX509Key(publicKey))
+        val issuer = X500Name("CN=HTML2APK Builder, O=HTML2APK, C=ID")
+        val subject = issuer
 
-        val algorithmId = AlgorithmId.get("SHA256withRSA")
-        certInfo.set(
-            X509CertInfo.ALGORITHM_ID,
-            CertificateAlgorithmId(algorithmId)
+        val builder = JcaX509v3CertificateBuilder(
+            issuer,
+            serial,
+            notBefore,
+            notAfter,
+            subject,
+            publicKey
         )
 
-        val cert = X509CertImpl(certInfo)
-        cert.sign(privateKey, "SHA256withRSA")
-        return cert
+        val signer = JcaContentSignerBuilder("SHA256withRSA").build(privateKey)
+        val certHolder = builder.build(signer)
+
+        return JcaX509CertificateConverter().getCertificate(certHolder)
     }
 }
