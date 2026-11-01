@@ -58,4 +58,9 @@ dependencies {
 
     // Level 3: library signing resmi dari Android build tools.
     implementation("com.android.tools.build:apksig:8.2.0")
+
+    // Diperlukan untuk membuat sertifikat self-signed di Android,
+    // karena sun.security.x509 tidak tersedia di runtime Android.
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.77")
+    implementation("org.bouncycastle:bcprov-jdk15to18:1.77")
 }
