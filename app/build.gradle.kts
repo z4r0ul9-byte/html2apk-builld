@@ -56,11 +56,15 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
 
-    // Level 3: library signing resmi dari Android build tools.
+    // Signing (Level 3).
     implementation("com.android.tools.build:apksig:8.2.0")
 
-    // Diperlukan untuk membuat sertifikat self-signed di Android,
-    // karena sun.security.x509 tidak tersedia di runtime Android.
+    // Sertifikat self-signed (pengganti sun.security.x509 yang tidak ada di Android).
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.77")
     implementation("org.bouncycastle:bcprov-jdk15to18:1.77")
+
+    // Level 4: ARSCLib untuk mengedit AndroidManifest.xml & resources.arsc.
+    // Jika versi 2.9.2 tidak tersedia di JitPack, gunakan alternatif Maven Central:
+    // implementation("io.github.reandroid:ARSCLib:+")
+    implementation("com.github.reandroid:ARSCLib:2.9.2")
 }
