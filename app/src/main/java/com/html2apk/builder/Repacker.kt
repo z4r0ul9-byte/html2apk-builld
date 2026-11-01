@@ -1,18 +1,24 @@
 package com.html2apk.builder
 
+import com.reandroid.apk.ApkModule
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
 /**
- * Mesin repack APK (Level 2 + Level 3).
+ * Mesin repack + edit identitas APK (Level 4).
  *
- * Perubahan Level 3:
- * - Selain melewati `assets/www/`, sekarang juga MELEWATI seluruh `META-INF/`
- *   dari template. Folder ini berisi segel JAR lama (MANIFEST.MF, CERT.SF, CERT.RSA)
- *   yang sudah tidak valid setelah isi APK diubah, dan akan membuat proses
- *   signing ulang gagal / APK hasil tidak valid.
+ * Alur:
+ * 1. Buka template APK dengan ARSCLib (`ApkModule`).
+ * 2. Ganti atribut `package` pada `<manifest>` menjadi [newPackageName].
+ * 3. Ganti string resource `app_name` menjadi [newAppName].
+ * 4. Tulis APK hasil edit ke file sementara.
+ * 5. Repack ZIP dari file sementara: skip `META-INF/` & `assets/www/`,
+ *    sisipkan HTML user sebagai `assets/www/index.html`.
+ *
+ * Catatan: `com.reandroid.apk.ApkFile` tidak tersedia di ARSCLib publik;
+ * API resmi untuk membaca APK adalah `ApkModule.loadApkFile(File)`.
  */
 object Repacker {
 
@@ -21,7 +27,13 @@ object Repacker {
     private const val META_INF_PREFIX = "META-INF/"
     private const val INDEX_HTML_ENTRY = "assets/www/index.html"
 
-    fun repack(templateApk: File, htmlFile: File, outputApk: File) {
+    fun repack(
+        templateApk: File,
+        htmlFile: File,
+        outputApk: File,
+        newAppName: String,
+        newPackageName: String
+    ) {
         require(templateApk.exists()) {
             "Template APK tidak ditemukan: ${templateApk.absolutePath}"
         }
@@ -29,44 +41,82 @@ object Repacker {
             "File HTML tidak ditemukan: ${htmlFile.absolutePath}"
         }
 
-        if (outputApk.exists() && !outputApk.delete()) {
-            throw IllegalStateException("Gagal menghapus output lama: ${outputApk.absolutePath}")
+        // File sementara hasil edit ARSCLib (manifest + resources.arsc).
+        val tempEditedApk = File(templateApk.parentFile, "temp_edited.apk")
+        if (tempEditedApk.exists() && !tempEditedApk.delete()) {
+            throw IllegalStateException("Gagal menghapus temporary APK lama")
         }
-        outputApk.parentFile?.mkdirs()
 
-        ZipFile(templateApk).use { zip ->
-            ZipOutputStream(outputApk.outputStream().buffered()).use { out ->
-                val entries = zip.entries()
-                while (entries.hasMoreElements()) {
-                    val entry = entries.nextElement()
+        try {
+            // ── LANGKAH 1: Edit manifest & resources dengan ARSCLib ──
+            val apkModule = ApkModule.loadApkFile(templateApk)
+            try {
+                // 1a. Ganti package name pada <manifest package="...">.
+                val manifest = apkModule.androidManifestBlock
+                    ?: throw IllegalStateException(
+                        "AndroidManifest.xml tidak ditemukan di template"
+                    )
+                manifest.setPackageName(newPackageName)
 
-                    // Level 3: buang segel lama agar signing baru valid.
-                    if (entry.name.startsWith(META_INF_PREFIX)) {
-                        continue
-                    }
-                    // Ganti seluruh isi web template dengan HTML user.
-                    if (entry.name.startsWith(WWW_PREFIX)) {
-                        continue
-                    }
+                // 1b. Ganti string resource `app_name` pada resources.arsc.
+                val tableBlock = apkModule.tableBlock
+                    ?: throw IllegalStateException(
+                        "resources.arsc tidak ditemukan di template"
+                    )
+                val packageBlock = tableBlock.packages.firstOrNull()
+                    ?: throw IllegalStateException("Package block kosong di resources.arsc")
 
-                    val newEntry = ZipEntry(entry.name)
-                    out.putNextEntry(newEntry)
-                    if (!entry.isDirectory) {
-                        zip.getInputStream(entry).use { input ->
-                            copyStream(input, out)
+                val appNameEntry = packageBlock.getOrCreate("", "string", "app_name")
+                appNameEntry.setDataAsString(newAppName)
+
+                // 1c. Simpan hasil edit ke file sementara.
+                apkModule.writeApk(tempEditedApk)
+            } finally {
+                // Pastikan resource ARSCLib dilepas.
+                apkModule.close()
+            }
+
+            // ── LANGKAH 2: Repack ZIP dari file sementara hasil edit ──
+            if (outputApk.exists() && !outputApk.delete()) {
+                throw IllegalStateException(
+                    "Gagal menghapus output lama: ${outputApk.absolutePath}"
+                )
+            }
+            outputApk.parentFile?.mkdirs()
+
+            ZipFile(tempEditedApk).use { zip ->
+                ZipOutputStream(outputApk.outputStream().buffered()).use { out ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+
+                        // Buang segel lama agar signing baru valid.
+                        if (entry.name.startsWith(META_INF_PREFIX)) continue
+                        // Ganti seluruh isi web template dengan HTML user.
+                        if (entry.name.startsWith(WWW_PREFIX)) continue
+
+                        val newEntry = ZipEntry(entry.name)
+                        out.putNextEntry(newEntry)
+                        if (!entry.isDirectory) {
+                            zip.getInputStream(entry).use { input ->
+                                copyStream(input, out)
+                            }
                         }
+                        out.closeEntry()
+                    }
+
+                    // Sisipkan HTML user sebagai assets/www/index.html.
+                    val indexEntry = ZipEntry(INDEX_HTML_ENTRY)
+                    out.putNextEntry(indexEntry)
+                    htmlFile.inputStream().use { input ->
+                        copyStream(input, out)
                     }
                     out.closeEntry()
                 }
-
-                // Sisipkan HTML user sebagai assets/www/index.html.
-                val indexEntry = ZipEntry(INDEX_HTML_ENTRY)
-                out.putNextEntry(indexEntry)
-                htmlFile.inputStream().use { input ->
-                    copyStream(input, out)
-                }
-                out.closeEntry()
             }
+        } finally {
+            // Bersihkan file sementara.
+            if (tempEditedApk.exists()) tempEditedApk.delete()
         }
     }
 
