@@ -1,6 +1,7 @@
 package com.html2apk.builder
 
 import com.reandroid.apk.ApkModule
+import com.reandroid.arsc.chunk.PackageBlock
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -10,15 +11,12 @@ import java.util.zip.ZipOutputStream
  * Mesin repack + edit identitas APK (Level 4).
  *
  * Alur:
- * 1. Buka template APK dengan ARSCLib (`ApkModule`).
+ * 1. Buka template APK dengan ARSCLib (`ApkModule.loadApkFile`).
  * 2. Ganti atribut `package` pada `<manifest>` menjadi [newPackageName].
  * 3. Ganti string resource `app_name` menjadi [newAppName].
  * 4. Tulis APK hasil edit ke file sementara.
  * 5. Repack ZIP dari file sementara: skip `META-INF/` & `assets/www/`,
  *    sisipkan HTML user sebagai `assets/www/index.html`.
- *
- * Catatan: `com.reandroid.apk.ApkFile` tidak tersedia di ARSCLib publik;
- * API resmi untuk membaca APK adalah `ApkModule.loadApkFile(File)`.
  */
 object Repacker {
 
@@ -63,11 +61,20 @@ object Repacker {
                     ?: throw IllegalStateException(
                         "resources.arsc tidak ditemukan di template"
                     )
-                val packageBlock = tableBlock.packages.firstOrNull()
-                    ?: throw IllegalStateException("Package block kosong di resources.arsc")
 
+                // ARSCLib menyediakan listPackages() yang mengembalikan Iterable,
+                // bukan List, sehingga kita ambil package pertama via iterator.
+                // Alternatif yang lebih aman jika package ID diketahui:
+                //   val packageBlock = tableBlock.getPackageBlockById(0x7f)
+                val packageIterator = tableBlock.listPackages().iterator()
+                if (!packageIterator.hasNext()) {
+                    throw IllegalStateException("Package block kosong di resources.arsc")
+                }
+                val packageBlock: PackageBlock = packageIterator.next()
+
+                // Method yang benar adalah setValueAsString, bukan setDataAsString.
                 val appNameEntry = packageBlock.getOrCreate("", "string", "app_name")
-                appNameEntry.setDataAsString(newAppName)
+                appNameEntry.setValueAsString(newAppName)
 
                 // 1c. Simpan hasil edit ke file sementara.
                 apkModule.writeApk(tempEditedApk)
