@@ -11,6 +11,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Diperlukan untuk mengambil ARSCLib via JitPack.
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
