@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,9 +42,9 @@ class BuilderViewModel(
     private val _uiState = MutableStateFlow(BuilderUiState())
     val uiState: StateFlow<BuilderUiState> = _uiState.asStateFlow()
 
-    // PERBAIKAN: Ekspos Flow dari DAO untuk HistoryScreen.
-    // Catatan: Jika nama fungsi di DAO Anda bukan getAllHistory(), sesuaikan (misal: getAll(), getHistoryFlow()).
+    // PERBAIKAN: Menambahkan .catch {} agar jika query Room error, aplikasi tidak crash (Force Close).
     val historyFlow = historyDao.getAllHistory()
+        .catch { emit(emptyList()) } 
 
     fun onFileSelected(uri: Uri) {
         val name = queryFileName(uri) ?: "unknown"
@@ -116,14 +117,12 @@ class BuilderViewModel(
                     output
                 }
 
-                // PERBAIKAN: Menambahkan parameter 'timestamp' dan memastikan parameter Entity sesuai.
-                // Catatan: Sesuaikan nama method DAO (insertHistory) jika di file Anda bernama 'insert' atau 'addHistory'.
                 val record = BuildHistory(
                     appName = fileName.substringBeforeLast("."),
                     packageName = "com.html2apk.generated",
                     apkPath = outputApk.absolutePath,
                     status = "Success",
-                    timestamp = System.currentTimeMillis() // PERBAIKAN: Tambah timestamp
+                    timestamp = System.currentTimeMillis()
                 )
                 historyDao.insertHistory(record)
 
