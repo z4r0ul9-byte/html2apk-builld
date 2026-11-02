@@ -43,8 +43,7 @@ class BuilderViewModel(
     private val _uiState = MutableStateFlow(BuilderUiState())
     val uiState: StateFlow<BuilderUiState> = _uiState.asStateFlow()
 
-    // PERBAIKAN 1: Menambahkan flowOn(IO) agar query Room tidak pernah menyentuh Main Thread.
-    // PERBAIKAN 2: catch menangkap error DB (misal skema mismatch) agar tidak crash.
+    // PERBAIKAN: Menggunakan nama fungsi DAO yang benar (getAllHistory)
     val historyFlow = historyDao.getAllHistory()
         .flowOn(Dispatchers.IO)
         .catch { emit(emptyList()) }
@@ -120,13 +119,15 @@ class BuilderViewModel(
                     output
                 }
 
+                // PERBAIKAN: Menyesuaikan dengan BuildHistory Entity (id autoGenerate, appName, packageName, apkPath, timestamp, status)
                 val record = BuildHistory(
                     appName = fileName.substringBeforeLast("."),
                     packageName = "com.html2apk.generated",
                     apkPath = outputApk.absolutePath,
-                    status = "Success",
-                    timestamp = System.currentTimeMillis()
+                    timestamp = System.currentTimeMillis(),
+                    status = "SUCCESS" // Sesuai komentar di BuildHistory.kt ("SUCCESS" atau "FAILED")
                 )
+                // PERBAIKAN: Menggunakan nama fungsi DAO yang benar (insertHistory)
                 historyDao.insertHistory(record)
 
                 _uiState.update {
@@ -144,6 +145,18 @@ class BuilderViewModel(
                         progressMessage = ""
                     )
                 }
+                
+                // Opsional: Simpan status FAILED ke database jika build gagal
+                try {
+                    val failedRecord = BuildHistory(
+                        appName = fileName.substringBeforeLast("."),
+                        packageName = "com.html2apk.generated",
+                        apkPath = "",
+                        timestamp = System.currentTimeMillis(),
+                        status = "FAILED"
+                    )
+                    historyDao.insertHistory(failedRecord)
+                } catch (_: Exception) { /* Abaikan error DB saat gagal build */ }
             }
         }
     }
@@ -169,7 +182,7 @@ class BuilderViewModel(
                     if (!canonicalDest.startsWith(canonicalBase) &&
                         canonicalDest != destDir.canonicalPath
                     ) {
-                        throw SecurityException("Entri ZIP tidak aman (path traversal): $entryName")
+                        throw SecurityException("Entri ZIP tidak aman: $entryName")
                     }
 
                     if (entry.isDirectory) {
