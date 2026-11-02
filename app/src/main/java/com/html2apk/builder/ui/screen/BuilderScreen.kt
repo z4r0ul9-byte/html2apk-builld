@@ -33,12 +33,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.html2apk.builder.ui.BuilderViewModel
 
-/**
- * BuilderScreen Level 7.
- * Perubahan dari Level 6:
- * - File picker menerima HTML dan ZIP (via OpenDocument karena mendukung MIME array).
- * - Label tombol diubah menjadi "Pilih File HTML / ZIP".
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BuilderScreen(
@@ -47,7 +41,6 @@ fun BuilderScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
-    // GetContent hanya menerima String; untuk multi-MIME gunakan OpenDocument (Array<String>).
     val sourceFilePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -71,7 +64,6 @@ fun BuilderScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // ---------- Sumber ----------
             Text(
                 text = "File Sumber",
                 style = MaterialTheme.typography.titleMedium,
@@ -88,13 +80,12 @@ fun BuilderScreen(
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Text(
-                        text = "Dukung: .html tunggal, atau .zip yang berisi index.html + css/js/gambar",
+                        text = "Dukung: .html tunggal, atau .zip berisi index.html",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Button(
                         onClick = {
-                            // Level 7: Menerima HTML dan ZIP sekaligus.
                             sourceFilePicker.launch(
                                 arrayOf(
                                     "text/html",
@@ -110,7 +101,6 @@ fun BuilderScreen(
                 }
             }
 
-            // ---------- Ikon ----------
             Text(
                 text = "Ikon Aplikasi (opsional)",
                 style = MaterialTheme.typography.titleMedium,
@@ -123,11 +113,8 @@ fun BuilderScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = if (state.selectedIconUri != null) {
-                            "Ikon sudah dipilih"
-                        } else {
-                            "Belum ada ikon dipilih (pakai ikon default template)"
-                        },
+                        text = if (state.selectedIconUri != null) "Ikon sudah dipilih"
+                        else "Belum ada ikon dipilih",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Button(
@@ -139,7 +126,6 @@ fun BuilderScreen(
                 }
             }
 
-            // ---------- Build ----------
             Button(
                 onClick = { viewModel.startBuild() },
                 enabled = state.selectedFileUri != null && !state.isBuilding,
