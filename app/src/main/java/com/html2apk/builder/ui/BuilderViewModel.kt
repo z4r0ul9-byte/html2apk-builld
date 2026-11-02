@@ -1,217 +1,237 @@
 package com.html2apk.builder.ui
 
 import android.app.Application
-import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
 import android.provider.OpenableColumns
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.html2apk.builder.Repacker
-import com.html2apk.builder.SignerHelper
-import com.html2apk.builder.data.AppDatabase
 import com.html2apk.builder.data.BuildHistory
 import com.html2apk.builder.data.BuildHistoryDao
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 
 /**
- * ViewModel utama untuk BuilderScreen.
- *
- * Menyimpan seluruh state form input, state proses build, dan menulis
- * riwayat (SUCCESS / FAILED) ke Room database setelah proses selesai.
+ * State UI Builder.
  */
-class BuilderViewModel(application: Application) : AndroidViewModel(application) {
+data class BuilderUiState(
+    val selectedFileUri: Uri? = null,
+    val selectedFileName: String? = null,
+    val selectedIconUri: Uri? = null,
+    val isBuilding: Boolean = false,
+    val progressMessage: String = "",
+    val outputApkPath: String? = null,
+    val errorMessage: String? = null
+)
 
-    private val appContext: Context = application.applicationContext
-    private val dao: BuildHistoryDao = AppDatabase.getDatabase(appContext).historyDao()
+/**
+ * ViewModel Level 7.
+ *
+ * Perubahan dari Level 6:
+ * - startBuild() mendeteksi ekstensi file:
+ *   • .zip  → extractZipToCache() (folder hasil ekstrak dikirim ke Repacker)
+ *   • .html → copyUriToCache()      (file tunggal dikirim ke Repacker)
+ * - extractZipToCache() memakai java.util.zip, tidak menambah dependensi.
+ */
+class BuilderViewModel(
+    application: Application,
+    private val historyDao: BuildHistoryDao
+) : AndroidViewModel(application) {
 
-    /** Flow riwayat build terurut dari terbaru. */
-    val historyFlow: Flow<List<BuildHistory>> = dao.getAllHistory()
+    private val _uiState = MutableStateFlow(BuilderUiState())
+    val uiState: StateFlow<BuilderUiState> = _uiState.asStateFlow()
 
-    // ── State form input (dipegang ViewModel agar persist antar-rotasi) ──
-    var selectedHtmlUri by mutableStateOf<Uri?>(null)
-        private set
-    var selectedHtmlName by mutableStateOf<String?>(null)
-        private set
-    var selectedIconUri by mutableStateOf<Uri?>(null)
-        private set
-    var selectedIconName by mutableStateOf<String?>(null)
-        private set
-    var appName by mutableStateOf("")
-    var packageName by mutableStateOf("")
-
-    // ── State proses build ──
-    var isBuilding by mutableStateOf(false)
-        private set
-    var buildResult by mutableStateOf<String?>(null)
-        private set
-
-    fun setHtmlUri(uri: Uri?) {
-        selectedHtmlUri = uri
-        selectedHtmlName = uri?.let { resolveDisplayName(appContext, it) }
+    fun onFileSelected(uri: Uri) {
+        val name = queryFileName(uri) ?: "unknown"
+        _uiState.update {
+            it.copy(
+                selectedFileUri = uri,
+                selectedFileName = name,
+                errorMessage = null,
+                outputApkPath = null
+            )
+        }
     }
 
-    fun setIconUri(uri: Uri?) {
-        selectedIconUri = uri
-        selectedIconName = uri?.let { resolveDisplayName(appContext, it) }
+    fun onIconSelected(uri: Uri) {
+        _uiState.update { it.copy(selectedIconUri = uri) }
     }
 
-    /** Konsumsi hasil build agar Toast tidak ditampilkan berulang. */
-    fun consumeBuildResult() {
-        buildResult = null
+    fun startBuild() {
+        val state = _uiState.value
+        val fileUri = state.selectedFileUri ?: run {
+            _uiState.update { it.copy(errorMessage = "Pilih file HTML atau ZIP terlebih dahulu") }
+            return
+        }
+        if (state.isBuilding) return
+
+        val fileName = state.selectedFileName.orEmpty()
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isBuilding = true,
+                    errorMessage = null,
+                    outputApkPath = null,
+                    progressMessage = "Menyiapkan build..."
+                )
+            }
+            try {
+                val outputApk = withContext(Dispatchers.IO) {
+                    val ctx = getApplication<Application>()
+
+                    // 1. Tentukan jenis input berdasarkan ekstensi.
+                    _uiState.update { it.copy(progressMessage = "Menyiapkan file input...") }
+                    val inputFile: File = if (fileName.endsWith(".zip", ignoreCase = true)) {
+                        extractZipToCache(ctx, fileUri)
+                    } else {
+                        copyUriToCache(ctx, fileUri, "input.html")
+                    }
+
+                    // 2. Siapkan resource lain.
+                    _uiState.update { it.copy(progressMessage = "Menyalin template APK...") }
+                    val templateApk = copyAssetToCache(ctx, "template.apk")
+
+                    val iconFile: File? = state.selectedIconUri?.let { iconUri ->
+                        copyUriToCache(ctx, iconUri, "launcher_icon.png")
+                    }
+
+                    val keystoreFile = copyAssetToCache(ctx, "debug.keystore")
+
+                    // 3. Repack + sign.
+                    _uiState.update { it.copy(progressMessage = "Repacking & signing APK...") }
+                    val output = File(ctx.cacheDir, "output_${System.currentTimeMillis()}.apk")
+
+                    Repacker(ctx).repack(
+                        templateApk = templateApk,
+                        inputFile = inputFile,
+                        outputApk = output,
+                        iconFile = iconFile,
+                        keystoreFile = keystoreFile,
+                        keystorePass = "android",
+                        keyAlias = "androiddebugkey",
+                        keyPass = "android"
+                    )
+                    output
+                }
+
+                // 4. Simpan riwayat build (Room — tidak diubah).
+                val record = BuildHistory(
+                    fileName = fileName,
+                    outputPath = outputApk.absolutePath,
+                    timestamp = System.currentTimeMillis(),
+                    sizeBytes = outputApk.length()
+                )
+                historyDao.insert(record)
+
+                _uiState.update {
+                    it.copy(
+                        isBuilding = false,
+                        outputApkPath = outputApk.absolutePath,
+                        progressMessage = "Build selesai"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isBuilding = false,
+                        errorMessage = e.message ?: "Build gagal",
+                        progressMessage = ""
+                    )
+                }
+            }
+        }
     }
 
     /**
-     * Menjalankan pipeline build lengkap:
-     * copy template → repack (ARSCLib) → generate keystore → sign → simpan riwayat.
+     * Ekstrak ZIP dari [zipUri] ke folder cache sementara.
+     * - Menggunakan java.util.zip (tidak ada dependensi baru).
+     * - Anti path traversal (Zip Slip).
+     * - Validasi: index.html WAJIB ada di root hasil ekstrak.
+     *
+     * @return File folder hasil ekstrak.
      */
-    fun startBuild() {
-        val htmlUri = selectedHtmlUri ?: return
-        if (isBuilding) return
+    private fun extractZipToCache(context: Context, zipUri: Uri): File {
+        val destDir = File(context.cacheDir, "zip_extract_${System.currentTimeMillis()}")
+        if (!destDir.exists() && !destDir.mkdirs()) {
+            throw IOException("Gagal membuat folder ekstrak: ${destDir.absolutePath}")
+        }
 
-        isBuilding = true
-        buildResult = null
+        val rawStream = context.contentResolver.openInputStream(zipUri)
+            ?: throw IOException("Tidak bisa membuka file ZIP")
 
-        val finalAppName = appName.ifBlank { "My App" }
-        val finalPackageName = packageName.ifBlank { "com.html2apk.generated" }
-        val currentIconUri = selectedIconUri
+        rawStream.use { raw ->
+            ZipInputStream(BufferedInputStream(raw)).use { zis ->
+                var entry: ZipEntry? = zis.nextEntry
+                while (entry != null) {
+                    val entryName = entry.name
+                    val destFile = File(destDir, entryName)
 
-        viewModelScope.launch(Dispatchers.IO) {
-            var success = false
-            var apkPath = ""
-            var errorMessage: String? = null
-
-            try {
-                // 1. Salin template.apk dari assets ke cache.
-                val templateFile = File(appContext.cacheDir, "template.apk")
-                if (templateFile.exists()) templateFile.delete()
-                appContext.assets.open("template.apk").use { input ->
-                    templateFile.outputStream().use { output ->
-                        input.copyTo(output)
+                    // Zip Slip protection.
+                    val canonicalBase = destDir.canonicalPath + File.separator
+                    val canonicalDest = destFile.canonicalPath
+                    if (!canonicalDest.startsWith(canonicalBase) &&
+                        canonicalDest != destDir.canonicalPath
+                    ) {
+                        throw SecurityException("Entri ZIP tidak aman (path traversal): $entryName")
                     }
-                }
 
-                // 2. Siapkan direktori output.
-                val outputDir = appContext.getExternalFilesDir(
-                    Environment.DIRECTORY_DOWNLOADS
-                ) ?: throw IllegalStateException(
-                    "Direktori unduhan eksternal tidak tersedia"
-                )
-                outputDir.mkdirs()
-
-                // 3. Salin input HTML + ikon ke cache.
-                val htmlFile = copyUriToCache(appContext, htmlUri, "input.html")
-                val iconFile = currentIconUri?.let {
-                    copyUriToCache(appContext, it, "icon.png")
-                }
-
-                // 4. Repack via ARSCLib (logika Level 5 tidak diubah).
-                val unsignedApk = File(outputDir, "output.apk")
-                if (unsignedApk.exists() && !unsignedApk.delete()) {
-                    throw IllegalStateException("Gagal menghapus APK unsigned lama")
-                }
-
-                Repacker.repack(
-                    templateApk = templateFile,
-                    htmlFile = htmlFile,
-                    iconFile = iconFile,
-                    outputApk = unsignedApk,
-                    newAppName = finalAppName,
-                    newPackageName = finalPackageName
-                )
-
-                // 5. Generate keystore + sign.
-                val keystoreFile = File(appContext.cacheDir, "keystore.p12")
-                SignerHelper.generateKeystore(keystoreFile)
-
-                val signedFile = File(outputDir, "signed_output.apk")
-                SignerHelper.signApk(unsignedApk, signedFile, keystoreFile)
-
-                if (unsignedApk.exists()) unsignedApk.delete()
-
-                apkPath = signedFile.absolutePath
-                success = true
-            } catch (e: Exception) {
-                errorMessage = e.message ?: e.javaClass.simpleName
-            }
-
-            // 6. Simpan riwayat ke Room (SUCCESS maupun FAILED).
-            try {
-                dao.insertHistory(
-                    BuildHistory(
-                        appName = finalAppName,
-                        packageName = finalPackageName,
-                        apkPath = apkPath,
-                        timestamp = System.currentTimeMillis(),
-                        status = if (success) "SUCCESS" else "FAILED"
-                    )
-                )
-            } catch (_: Exception) {
-                // Kegagalan insert tidak boleh menggagalkan hasil build.
-            }
-
-            // 7. Update state UI di main thread.
-            withContext(Dispatchers.Main) {
-                isBuilding = false
-                buildResult = if (success) {
-                    "Sukses! APK tersimpan di: $apkPath"
-                } else {
-                    "Gagal build: ${errorMessage ?: "Unknown error"}"
+                    if (entry.isDirectory) {
+                        destFile.mkdirs()
+                    } else {
+                        destFile.parentFile?.mkdirs()
+                        FileOutputStream(destFile).use { fos -> zis.copyTo(fos) }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
                 }
             }
         }
-    }
-}
 
-/**
- * Menyalin konten `content://` URI ke file cache dengan nama tertentu.
- */
-internal fun copyUriToCache(context: Context, uri: Uri, targetFileName: String): File {
-    val cacheFile = File(context.cacheDir, targetFileName)
-    if (cacheFile.exists() && !cacheFile.delete()) {
-        throw IllegalStateException("Gagal menghapus cache $targetFileName lama")
-    }
-
-    val inputStream = context.contentResolver.openInputStream(uri)
-        ?: throw IllegalStateException("Gagal membuka file: $uri")
-
-    inputStream.use { input ->
-        cacheFile.outputStream().use { output ->
-            input.copyTo(output)
+        // Validasi index.html ada di root hasil ekstrak.
+        if (!File(destDir, "index.html").exists()) {
+            destDir.deleteRecursively()
+            throw IllegalArgumentException("File index.html wajib ada di dalam ZIP!")
         }
+
+        return destDir
     }
-    return cacheFile
-}
 
-/**
- * Mengambil nama tampilan file dari Uri.
- */
-internal fun resolveDisplayName(context: Context, uri: Uri): String {
-    var name = uri.lastPathSegment ?: uri.toString()
+    private fun copyUriToCache(context: Context, uri: Uri, targetName: String): File {
+        val destFile = File(context.cacheDir, targetName)
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(destFile).use { output -> input.copyTo(output) }
+        } ?: throw IOException("Gagal membuka file: $uri")
+        return destFile
+    }
 
-    if (uri.scheme == ContentResolver.SCHEME_CONTENT) {
-        context.contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
+    private fun copyAssetToCache(context: Context, assetName: String): File {
+        val destFile = File(context.cacheDir, assetName)
+        context.assets.open(assetName).use { input ->
+            FileOutputStream(destFile).use { output -> input.copyTo(output) }
+        }
+        return destFile
+    }
+
+    private fun queryFileName(uri: Uri): String? {
+        val ctx = getApplication<Application>()
+        return ctx.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
-                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (index >= 0) {
-                    name = cursor.getString(index) ?: name
-                }
-            }
-        }
+                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0) cursor.getString(idx) else null
+            } else null
+        } ?: uri.lastPathSegment
     }
-    return name
 }
