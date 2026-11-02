@@ -1,123 +1,217 @@
 package com.html2apk.builder
 
-import com.reandroid.apk.ApkModule
-import com.reandroid.archive.FileInputSource
-import com.reandroid.arsc.chunk.PackageBlock
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import com.android.apksig.ApkSigner
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.security.KeyStore
+import java.security.PrivateKey
+import java.security.cert.X509Certificate
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 /**
- * Mesin repack + edit identitas APK (Level 6 - Perbaikan Ikon).
+ * Repacker Level 7.
  *
- * Menggunakan ARSCLib `ApkModule` secara penuh untuk menjaga alignment ZIP.
- * Logika adaptif icon XML dihapus agar Android terpaksa menggunakan file PNG.
+ * Perubahan dari Level 5/6:
+ * - Parameter `htmlFile: File` diganti menjadi `inputFile: File`.
+ * - Jika `inputFile` adalah FOLDER (hasil ekstrak ZIP):
+ *     • Validasi: `index.html` wajib ada di root folder.
+ *     • Iterasi rekursif walkTopDown(), semua file masuk ke `assets/www/<relative_path>`.
+ * - Jika `inputFile` adalah FILE tunggal (.html):
+ *     • Bungkus sebagai `assets/www/index.html` (sama seperti sebelumnya).
+ * - `assets/www/` lama di dalam template APK selalu dihapus dulu sebelum ditambahkan.
+ * - Signature lama (META-INF/*.SF/.RSA/.DSA/.EC/MANIFEST.MF) dihapus, lalu sign ulang.
+ * - Logika ikon tetap dipertahankan (replace `res/*/ic_launcher.png`).
+ * - Manifest & ARSC TIDAK disentuh — template APK sudah memiliki manifest/ARSC final.
+ * - Signing memakai `com.android.apksig` (sudah ada sejak Level 6).
  */
-object Repacker {
+class Repacker(private val context: Context) {
 
-    private const val WWW_INDEX_PATH = "assets/www/index.html"
+    companion object {
+        private const val ASSETS_WWW_PREFIX = "assets/www/"
+        private const val LAUNCHER_ICON_SIZE = 192
+    }
 
+    /** Cocok dengan entry ikon launcher standar (`res/mipmap-* / drawable-*/ic_launcher.png`). */
+    private val iconEntryPattern = Regex("^res/(mipmap|drawable)[^/]*/ic_launcher\\.png$")
+
+    /**
+     * Repack template APK dengan konten baru + sign ulang.
+     *
+     * @param inputFile  Bisa berupa FILE (.html) atau FOLDER (hasil ekstrak ZIP).
+     * @return File APK hasil sign (== [outputApk]).
+     */
     fun repack(
         templateApk: File,
-        htmlFile: File,
-        iconFile: File?,
+        inputFile: File,
         outputApk: File,
-        newAppName: String,
-        newPackageName: String
-    ) {
-        require(templateApk.exists()) {
-            "Template APK tidak ditemukan: ${templateApk.absolutePath}"
-        }
-        require(htmlFile.exists()) {
-            "File HTML tidak ditemukan: ${htmlFile.absolutePath}"
+        iconFile: File?,
+        keystoreFile: File,
+        keystorePass: String,
+        keyAlias: String,
+        keyPass: String
+    ): File {
+        require(templateApk.exists()) { "Template APK tidak ditemukan: ${templateApk.absolutePath}" }
+        require(inputFile.exists()) { "Input file/folder tidak ditemukan: ${inputFile.absolutePath}" }
+
+        // Validasi awal sebelum membuka ZIP supaya error jelas & cepat.
+        if (inputFile.isDirectory) {
+            val indexHtml = File(inputFile, "index.html")
+            if (!indexHtml.exists()) {
+                throw IllegalArgumentException("File index.html wajib ada di dalam ZIP!")
+            }
         }
 
-        // Muat template APK dengan ARSCLib.
-        val apkModule = ApkModule.loadApkFile(templateApk)
+        // Pre-load ikon (opsional) sekali saja, hemat IO saat iterasi.
+        val iconBytes: ByteArray? = iconFile?.let { loadScaledIcon(it) }
+
+        val unsignedApk = File(
+            outputApk.parentFile ?: File("."),
+            "unsigned_${System.currentTimeMillis()}.apk"
+        )
 
         try {
-            // ── 1. Ganti package name pada <manifest> ──
-            val manifest = apkModule.androidManifestBlock
-                ?: throw IllegalStateException(
-                    "AndroidManifest.xml tidak ditemukan di template"
-                )
-            manifest.setPackageName(newPackageName)
+            ZipFile(templateApk).use { zipIn ->
+                ZipOutputStream(FileOutputStream(unsignedApk)).use { zipOut ->
+                    val entries = zipIn.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        val name = entry.name
 
-            // ── 2. Ganti string resource `app_name` pada resources.arsc ──
-            val tableBlock = apkModule.tableBlock
-                ?: throw IllegalStateException(
-                    "resources.arsc tidak ditemukan di template"
-                )
+                        // 1) Buang assets/www/ lama.
+                        if (name.startsWith(ASSETS_WWW_PREFIX)) continue
 
-            val packageIterator = tableBlock.listPackages().iterator()
-            if (!packageIterator.hasNext()) {
-                throw IllegalStateException("Package block kosong di resources.arsc")
-            }
-            val packageBlock: PackageBlock = packageIterator.next()
+                        // 2) Buang signature lama (akan dibuat ulang).
+                        if (isOldSignature(name)) continue
 
-            val appNameEntry = packageBlock.getOrCreate("", "string", "app_name")
-            appNameEntry.setValueAsString(newAppName)
+                        // 3) Replace ikon launcher bila disediakan.
+                        if (iconBytes != null && iconEntryPattern.matches(name)) {
+                            zipOut.putNextEntry(ZipEntry(name))
+                            zipOut.write(iconBytes)
+                            zipOut.closeEntry()
+                            continue
+                        }
 
-            // ── 3. Ganti HTML: hapus entry lama, tambah entry baru ──
-            val zipEntryMap = apkModule.zipEntryMap
-
-            // Hapus entry index.html lama (jika ada).
-            zipEntryMap.remove(WWW_INDEX_PATH)
-
-            // Tambahkan HTML baru sebagai assets/www/index.html.
-            val htmlInputSource = FileInputSource(htmlFile, WWW_INDEX_PATH)
-            zipEntryMap.add(htmlInputSource)
-
-            // ── 4. Ganti ikon (jika iconFile != null) ──
-            if (iconFile != null && iconFile.exists()) {
-                val entriesToRemove = mutableListOf<String>()
-                val pngEntriesToReplace = mutableListOf<String>()
-
-                // Kumpulkan nama entry untuk dihapus atau diganti.
-                val iterator = zipEntryMap.iterator()
-                while (iterator.hasNext()) {
-                    val inputSource = iterator.next()
-                    val name = inputSource.alias
-
-                    // 4a. Hapus semua XML Adaptive Icon agar tidak menimpa PNG.
-                    if (name.startsWith("res/mipmap-anydpi-v26/") && name.endsWith(".xml")) {
-                        entriesToRemove.add(name)
+                        // 4) Salin apa adanya.
+                        val newEntry = ZipEntry(name)
+                        newEntry.time = entry.time
+                        zipOut.putNextEntry(newEntry)
+                        if (!entry.isDirectory) {
+                            zipIn.getInputStream(entry).use { input -> input.copyTo(zipOut) }
+                        }
+                        zipOut.closeEntry()
                     }
-                    // 4b. Cari semua file PNG ikon di folder mipmap.
-                    else if (name.startsWith("res/mipmap-") && 
-                             (name.endsWith("/ic_launcher.png") || name.endsWith("/ic_launcher_round.png"))) {
-                        pngEntriesToReplace.add(name)
+
+                    // 5) Tambahkan konten baru ke assets/www/.
+                    if (inputFile.isDirectory) {
+                        addExtractedDirectoryToApk(inputFile, zipOut)
+                    } else {
+                        addSingleHtmlToApk(inputFile, zipOut)
                     }
                 }
-
-                // Eksekusi penghapusan XML.
-                entriesToRemove.forEach { zipEntryMap.remove(it) }
-
-                // Eksekusi penggantian PNG.
-                if (pngEntriesToReplace.isNotEmpty()) {
-                    pngEntriesToReplace.forEach { entryName ->
-                        zipEntryMap.remove(entryName)
-                        // Timpa dengan iconFile baru menggunakan nama entry yang sama.
-                        zipEntryMap.add(FileInputSource(iconFile, entryName))
-                    }
-                } else {
-                    // Fallback jika template tidak memiliki PNG (sangat jarang terjadi).
-                    // Tambahkan setidaknya satu ikon default.
-                    val defaultIconPath = "res/mipmap-hdpi-v4/ic_launcher.png"
-                    zipEntryMap.add(FileInputSource(iconFile, defaultIconPath))
-                }
             }
 
-            // ── 5. Tulis APK hasil edit langsung ke output ──
-            if (outputApk.exists() && !outputApk.delete()) {
-                throw IllegalStateException(
-                    "Gagal menghapus output lama: ${outputApk.absolutePath}"
-                )
-            }
-            outputApk.parentFile?.mkdirs()
-
-            apkModule.writeApk(outputApk)
+            // 6) Sign (logika Level 6 dipertahankan).
+            signApk(unsignedApk, outputApk, keystoreFile, keystorePass, keyAlias, keyPass)
+            return outputApk
         } finally {
-            // Pastikan resource ARSCLib dilepas.
-            apkModule.close()
+            if (unsignedApk.exists()) unsignedApk.delete()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Assets writer
+    // ------------------------------------------------------------------
+
+    /** File tunggal (.html) → `assets/www/index.html`. */
+    private fun addSingleHtmlToApk(htmlFile: File, zipOut: ZipOutputStream) {
+        val entryName = "${ASSETS_WWW_PREFIX}index.html"
+        zipOut.putNextEntry(ZipEntry(entryName))
+        htmlFile.inputStream().use { it.copyTo(zipOut) }
+        zipOut.closeEntry()
+    }
+
+    /** Folder hasil ekstrak ZIP → semua file rekursif ke `assets/www/<relative_path>`. */
+    private fun addExtractedDirectoryToApk(rootDir: File, zipOut: ZipOutputStream) {
+        // Validasi defensif (sudah divalidasi di awal, tapi tetap dijaga).
+        if (!File(rootDir, "index.html").exists()) {
+            throw IllegalArgumentException("File index.html wajib ada di dalam ZIP!")
+        }
+
+        rootDir.walkTopDown()
+            .filter { it.isFile }
+            .forEach { file ->
+                val relativePath = file.relativeTo(rootDir).invariantSeparatorsPath
+                val entryName = ASSETS_WWW_PREFIX + relativePath
+                zipOut.putNextEntry(ZipEntry(entryName))
+                file.inputStream().use { it.copyTo(zipOut) }
+                zipOut.closeEntry()
+            }
+    }
+
+    // ------------------------------------------------------------------
+    // Utilitas
+    // ------------------------------------------------------------------
+
+    private fun isOldSignature(entryName: String): Boolean {
+        if (!entryName.startsWith("META-INF/")) return false
+        val upper = entryName.uppercase()
+        return upper == "META-INF/MANIFEST.MF" ||
+                upper.endsWith(".SF") ||
+                upper.endsWith(".RSA") ||
+                upper.endsWith(".DSA") ||
+                upper.endsWith(".EC")
+    }
+
+    private fun loadScaledIcon(iconFile: File): ByteArray {
+        val bmp = BitmapFactory.decodeFile(iconFile.absolutePath)
+            ?: return iconFile.readBytes()
+        val scaled = Bitmap.createScaledBitmap(bmp, LAUNCHER_ICON_SIZE, LAUNCHER_ICON_SIZE, true)
+        val baos = ByteArrayOutputStream()
+        scaled.compress(Bitmap.CompressFormat.PNG, 100, baos)
+        if (scaled !== bmp) bmp.recycle()
+        scaled.recycle()
+        return baos.toByteArray()
+    }
+
+    private fun signApk(
+        inputApk: File,
+        outputApk: File,
+        keystoreFile: File,
+        keystorePass: String,
+        keyAlias: String,
+        keyPass: String
+    ) {
+        val ks = KeyStore.getInstance("PKCS12")
+        FileInputStream(keystoreFile).use { fis ->
+            ks.load(fis, keystorePass.toCharArray())
+        }
+        val privateKey = ks.getKey(keyAlias, keyPass.toCharArray()) as PrivateKey
+        val cert = ks.getCertificate(keyAlias) as X509Certificate
+
+        val signerConfig = ApkSigner.SignerConfig.Builder(
+            keyAlias,
+            privateKey,
+            listOf(cert)
+        ).build()
+
+        ApkSigner.Builder(listOf(signerConfig))
+            .setInputApk(inputApk)
+            .setOutputApk(outputApk)
+            .setV1SigningEnabled(true)
+            .setV2SigningEnabled(true)
+            .setV3SigningEnabled(true)
+            .build()
+            .sign()
+
+        if (!outputApk.exists() || outputApk.length() == 0L) {
+            throw IllegalStateException("Signing APK gagal: output tidak valid")
         }
     }
 }
