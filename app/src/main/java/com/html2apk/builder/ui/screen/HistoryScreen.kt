@@ -43,22 +43,21 @@ fun HistoryScreen(
                 items(historyList) { item ->
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            // PERBAIKAN: Menggunakan safe-call (?:) jika data dari Room nullable (String?)
                             Text(
-                                text = item.appName ?: "Aplikasi Tanpa Nama",
+                                text = item.appName,
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = item.packageName ?: "com.unknown.package",
+                                text = item.packageName,
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
-                                text = "Path: ${item.apkPath ?: "-"}",
+                                text = "Path: ${item.apkPath.ifEmpty { "-" }}",
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
-                                text = "Status: ${item.status ?: "Unknown"}",
+                                text = "Status: ${item.status}",
                                 style = MaterialTheme.typography.bodySmall
                             )
                         }
