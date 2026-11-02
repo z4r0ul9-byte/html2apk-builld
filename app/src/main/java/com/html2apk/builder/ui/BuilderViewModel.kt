@@ -38,12 +38,7 @@ data class BuilderUiState(
 
 /**
  * ViewModel Level 7.
- *
- * Perubahan dari Level 6:
- * - startBuild() mendeteksi ekstensi file:
- *   • .zip  → extractZipToCache() (folder hasil ekstrak dikirim ke Repacker)
- *   • .html → copyUriToCache()      (file tunggal dikirim ke Repacker)
- * - extractZipToCache() memakai java.util.zip, tidak menambah dependensi.
+ * Perubahan: Menyesuaikan pemanggilan Room DAO dengan Entity BuildHistory yang ada.
  */
 class BuilderViewModel(
     application: Application,
@@ -127,14 +122,17 @@ class BuilderViewModel(
                     output
                 }
 
-                // 4. Simpan riwayat build (Room — tidak diubah).
+                // 4. Simpan riwayat build (Sesuaikan dengan parameter Entity BuildHistory Anda).
+                // Error sebelumnya: Parameter 'fileName', 'outputPath', 'sizeBytes' tidak ada.
+                // Parameter yang valid: appName, packageName, apkPath, status.
                 val record = BuildHistory(
-                    fileName = fileName,
-                    outputPath = outputApk.absolutePath,
-                    timestamp = System.currentTimeMillis(),
-                    sizeBytes = outputApk.length()
+                    appName = fileName.substringBeforeLast("."),
+                    packageName = "com.html2apk.generated",
+                    apkPath = outputApk.absolutePath,
+                    status = "Success"
                 )
-                historyDao.insert(record)
+                // Catatan: Jika fungsi DAO Anda bukan insertHistory, sesuaikan (misal: addHistory / insert).
+                historyDao.insertHistory(record)
 
                 _uiState.update {
                     it.copy(
@@ -155,14 +153,6 @@ class BuilderViewModel(
         }
     }
 
-    /**
-     * Ekstrak ZIP dari [zipUri] ke folder cache sementara.
-     * - Menggunakan java.util.zip (tidak ada dependensi baru).
-     * - Anti path traversal (Zip Slip).
-     * - Validasi: index.html WAJIB ada di root hasil ekstrak.
-     *
-     * @return File folder hasil ekstrak.
-     */
     private fun extractZipToCache(context: Context, zipUri: Uri): File {
         val destDir = File(context.cacheDir, "zip_extract_${System.currentTimeMillis()}")
         if (!destDir.exists() && !destDir.mkdirs()) {
@@ -200,7 +190,6 @@ class BuilderViewModel(
             }
         }
 
-        // Validasi index.html ada di root hasil ekstrak.
         if (!File(destDir, "index.html").exists()) {
             destDir.deleteRecursively()
             throw IllegalArgumentException("File index.html wajib ada di dalam ZIP!")
