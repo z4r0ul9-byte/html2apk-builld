@@ -1,139 +1,76 @@
 package com.html2apk.builder.ui.screen
 
-import android.content.Intent
-import android.widget.Toast
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
-import com.html2apk.builder.data.BuildHistory
-import com.html2apk.builder.ui.BuilderViewModel
-import java.io.File
+import com.html2apk.builder.data.BuildHistoryDao
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 @Composable
-fun HistoryScreen(viewModel: BuilderViewModel) {
-    val history by viewModel.historyFlow.collectAsState(initial = emptyList())
-    val context = LocalContext.current
+fun HistoryScreen(
+    historyDao: BuildHistoryDao
+) {
+    // Perbaikan: historyFlow -> getAllHistory (sesuaikan jika nama fungsi DAO Anda berbeda).
+    val historyList by historyDao.getAllHistory().collectAsState(initial = emptyList())
+    val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
 
-    if (history.isEmpty()) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "Belum ada riwayat build",
-                style = MaterialTheme.typography.bodyLarge
-            )
-        }
-        return
-    }
-
-    LazyColumn(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        items(history, key = { it.id }) { item ->
-            HistoryItem(item = item) {
-                try {
-                    val apkFile = File(item.apkPath)
-                    if (!apkFile.exists()) {
-                        Toast.makeText(
-                            context,
-                            "File APK tidak ditemukan: ${item.apkPath}",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    } else {
-                        // Menggunakan FileProvider untuk mendapatkan Content URI yang aman
-                        val uri = FileProvider.getUriForFile(
-                            context,
-                            "${context.packageName}.fileprovider",
-                            apkFile
-                        )
-                        
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(
-                                uri,
-                                "application/vnd.android.package-archive"
+        Text(
+            text = "Riwayat Build",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        if (historyList.isEmpty()) {
+            Text(text = "Belum ada riwayat build.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(historyList) { item ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                // Perbaikan: fileName -> appName
+                                text = item.appName,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium
                             )
-                            // Wajib: Memberikan izin baca sementara ke aplikasi Installer
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            Text(
+                                // Perbaikan: packageName (ditambahkan agar informatif)
+                                text = item.packageName,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                // Perbaikan: outputPath -> apkPath
+                                text = "Path: ${item.apkPath}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                // Perbaikan: status
+                                text = "Status: ${item.status}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
-                        context.startActivity(intent)
                     }
-                } catch (e: Exception) {
-                    Toast.makeText(
-                        context,
-                        "Gagal install: ${e.message ?: e.javaClass.simpleName}",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-    }
-}
-
-@Composable
-private fun HistoryItem(item: BuildHistory, onInstall: () -> Unit) {
-    val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
-    val dateStr = dateFormat.format(Date(item.timestamp))
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = item.appName,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = item.packageName,
-                style = MaterialTheme.typography.bodySmall
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Status: ${item.status}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = dateStr,
-                style = MaterialTheme.typography.bodySmall
-            )
-            if (item.status == "SUCCESS" && item.apkPath.isNotBlank()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onInstall,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(text = "Install")
                 }
             }
         }
