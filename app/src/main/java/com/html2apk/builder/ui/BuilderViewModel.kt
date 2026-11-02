@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,9 +43,11 @@ class BuilderViewModel(
     private val _uiState = MutableStateFlow(BuilderUiState())
     val uiState: StateFlow<BuilderUiState> = _uiState.asStateFlow()
 
-    // PERBAIKAN: Menambahkan .catch {} agar jika query Room error, aplikasi tidak crash (Force Close).
+    // PERBAIKAN 1: Menambahkan flowOn(IO) agar query Room tidak pernah menyentuh Main Thread.
+    // PERBAIKAN 2: catch menangkap error DB (misal skema mismatch) agar tidak crash.
     val historyFlow = historyDao.getAllHistory()
-        .catch { emit(emptyList()) } 
+        .flowOn(Dispatchers.IO)
+        .catch { emit(emptyList()) }
 
     fun onFileSelected(uri: Uri) {
         val name = queryFileName(uri) ?: "unknown"
