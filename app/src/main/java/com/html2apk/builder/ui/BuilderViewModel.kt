@@ -23,9 +23,6 @@ import java.io.IOException
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
-/**
- * State UI Builder.
- */
 data class BuilderUiState(
     val selectedFileUri: Uri? = null,
     val selectedFileName: String? = null,
@@ -36,10 +33,6 @@ data class BuilderUiState(
     val errorMessage: String? = null
 )
 
-/**
- * ViewModel Level 7.
- * Perubahan: Menyesuaikan pemanggilan Room DAO dengan Entity BuildHistory yang ada.
- */
 class BuilderViewModel(
     application: Application,
     private val historyDao: BuildHistoryDao
@@ -47,6 +40,10 @@ class BuilderViewModel(
 
     private val _uiState = MutableStateFlow(BuilderUiState())
     val uiState: StateFlow<BuilderUiState> = _uiState.asStateFlow()
+
+    // PERBAIKAN: Ekspos Flow dari DAO untuk HistoryScreen.
+    // Catatan: Jika nama fungsi di DAO Anda bukan getAllHistory(), sesuaikan (misal: getAll(), getHistoryFlow()).
+    val historyFlow = historyDao.getAllHistory()
 
     fun onFileSelected(uri: Uri) {
         val name = queryFileName(uri) ?: "unknown"
@@ -87,7 +84,6 @@ class BuilderViewModel(
                 val outputApk = withContext(Dispatchers.IO) {
                     val ctx = getApplication<Application>()
 
-                    // 1. Tentukan jenis input berdasarkan ekstensi.
                     _uiState.update { it.copy(progressMessage = "Menyiapkan file input...") }
                     val inputFile: File = if (fileName.endsWith(".zip", ignoreCase = true)) {
                         extractZipToCache(ctx, fileUri)
@@ -95,7 +91,6 @@ class BuilderViewModel(
                         copyUriToCache(ctx, fileUri, "input.html")
                     }
 
-                    // 2. Siapkan resource lain.
                     _uiState.update { it.copy(progressMessage = "Menyalin template APK...") }
                     val templateApk = copyAssetToCache(ctx, "template.apk")
 
@@ -105,7 +100,6 @@ class BuilderViewModel(
 
                     val keystoreFile = copyAssetToCache(ctx, "debug.keystore")
 
-                    // 3. Repack + sign.
                     _uiState.update { it.copy(progressMessage = "Repacking & signing APK...") }
                     val output = File(ctx.cacheDir, "output_${System.currentTimeMillis()}.apk")
 
@@ -122,16 +116,15 @@ class BuilderViewModel(
                     output
                 }
 
-                // 4. Simpan riwayat build (Sesuaikan dengan parameter Entity BuildHistory Anda).
-                // Error sebelumnya: Parameter 'fileName', 'outputPath', 'sizeBytes' tidak ada.
-                // Parameter yang valid: appName, packageName, apkPath, status.
+                // PERBAIKAN: Menambahkan parameter 'timestamp' dan memastikan parameter Entity sesuai.
+                // Catatan: Sesuaikan nama method DAO (insertHistory) jika di file Anda bernama 'insert' atau 'addHistory'.
                 val record = BuildHistory(
                     appName = fileName.substringBeforeLast("."),
                     packageName = "com.html2apk.generated",
                     apkPath = outputApk.absolutePath,
-                    status = "Success"
+                    status = "Success",
+                    timestamp = System.currentTimeMillis() // PERBAIKAN: Tambah timestamp
                 )
-                // Catatan: Jika fungsi DAO Anda bukan insertHistory, sesuaikan (misal: addHistory / insert).
                 historyDao.insertHistory(record)
 
                 _uiState.update {
@@ -169,7 +162,6 @@ class BuilderViewModel(
                     val entryName = entry.name
                     val destFile = File(destDir, entryName)
 
-                    // Zip Slip protection.
                     val canonicalBase = destDir.canonicalPath + File.separator
                     val canonicalDest = destFile.canonicalPath
                     if (!canonicalDest.startsWith(canonicalBase) &&
