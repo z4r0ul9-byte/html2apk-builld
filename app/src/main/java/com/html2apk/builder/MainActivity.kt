@@ -3,7 +3,6 @@ package com.html2apk.builder
 import android.app.Application
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -109,11 +108,14 @@ private fun MainScreen() {
     }
 }
 
-// FUNGSI UNTUK MEMBUKA INSTALLER BAWAAN ANDROID
+// FUNGSI UNTUK MEMBUKA INSTALLER
 private fun installApk(context: Context, apkPath: String) {
     try {
         val apkFile = File(apkPath)
-        // Menggunakan FileProvider agar Android 7+ tidak crash
+        if (!apkFile.exists()) {
+            Toast.makeText(context, "File APK tidak ditemukan", Toast.LENGTH_SHORT).show()
+            return
+        }
         val apkUri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
@@ -126,14 +128,18 @@ private fun installApk(context: Context, apkPath: String) {
         }
         context.startActivity(intent)
     } catch (e: Exception) {
-        Toast.makeText(context, "Gagal membuka installer: ${e.message}", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "Gagal Install: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
 
-// FUNGSI UNTUK MEMBAGIKAN APK KE APLIKASI LAIN
+// FUNGSI UNTUK MEMBAGIKAN APK
 private fun shareApk(context: Context, apkPath: String) {
     try {
         val apkFile = File(apkPath)
+        if (!apkFile.exists()) {
+            Toast.makeText(context, "File APK tidak ditemukan", Toast.LENGTH_SHORT).show()
+            return
+        }
         val apkUri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
@@ -146,6 +152,6 @@ private fun shareApk(context: Context, apkPath: String) {
         }
         context.startActivity(Intent.createChooser(intent, "Bagikan APK"))
     } catch (e: Exception) {
-        Toast.makeText(context, "Gagal membagikan APK: ${e.message}", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "Gagal Bagikan: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
