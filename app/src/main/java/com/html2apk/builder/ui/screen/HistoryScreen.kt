@@ -1,7 +1,6 @@
 package com.html2apk.builder.ui.screen
 
 import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,30 +32,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Layar riwayat build.
- *
- * CATATAN MANIFEST: Tombol Install memakai FileProvider dengan authority
- * "${applicationId}.fileprovider". Pastikan AndroidManifest.xml memuat:
- *
- *   <provider
- *       android:name="androidx.core.content.FileProvider"
- *       android:authorities="${applicationId}.fileprovider"
- *       android:exported="false"
- *       android:grantUriPermissions="true">
- *       <meta-data
- *           android:name="android.support.FILE_PROVIDER_PATHS"
- *           android:resource="@xml/file_paths" />
- *   </provider>
- *
- * dan `res/xml/file_paths.xml`:
- *   <paths>
- *       <external-files-path name="downloads" path="Download/" />
- *   </paths>
- *
- * Tanpa provider tersebut, tombol Install akan melempar exception
- * (ditangkap try-catch dan muncul Toast "Gagal install: ...").
- */
 @Composable
 fun HistoryScreen(viewModel: BuilderViewModel) {
     val history by viewModel.historyFlow.collectAsState(initial = emptyList())
@@ -83,24 +58,27 @@ fun HistoryScreen(viewModel: BuilderViewModel) {
         items(history, key = { it.id }) { item ->
             HistoryItem(item = item) {
                 try {
-                    val file = File(item.apkPath)
-                    if (!file.exists()) {
+                    val apkFile = File(item.apkPath)
+                    if (!apkFile.exists()) {
                         Toast.makeText(
                             context,
                             "File APK tidak ditemukan: ${item.apkPath}",
                             Toast.LENGTH_LONG
                         ).show()
                     } else {
-                        val uri: Uri = FileProvider.getUriForFile(
+                        // Menggunakan FileProvider untuk mendapatkan Content URI yang aman
+                        val uri = FileProvider.getUriForFile(
                             context,
                             "${context.packageName}.fileprovider",
-                            file
+                            apkFile
                         )
+                        
                         val intent = Intent(Intent.ACTION_VIEW).apply {
                             setDataAndType(
                                 uri,
                                 "application/vnd.android.package-archive"
                             )
+                            // Wajib: Memberikan izin baca sementara ke aplikasi Installer
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
