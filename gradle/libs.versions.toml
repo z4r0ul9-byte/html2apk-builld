@@ -1,6 +1,5 @@
 [versions]
 # AGP disamakan dengan versi yang sudah ada di classpath (root build.gradle.kts / settings.gradle.kts).
-# Jika suatu saat root diubah, ubah angka ini juga agar tidak bentrok.
 agp = "8.2.2"
 kotlin = "1.9.22"
 coreKtx = "1.12.0"
@@ -13,7 +12,9 @@ activityCompose = "1.8.2"
 composeBom = "2024.02.00"
 room = "2.6.1"
 ksp = "1.9.22-1.0.17"
-arscLib = "v2.2.6"
+# ARSCLib dipindahkan ke Maven Central dengan koordinat baru.
+# Gunakan versi stabil terbaru yang tersedia di Maven Central.
+arscLib = "1.4.0"
 apksig = "8.2.2"
 bouncycastle = "1.76"
 
@@ -40,7 +41,8 @@ androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = 
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
 # ── Dependensi Level 3 & 5 (tetap dipertahankan) ──
-arsc-lib = { group = "com.github.REAndroid", name = "ARSCLib", version.ref = "arscLib" }
+# Koordinat ARSCLib diperbarui ke io.github.reandroid.
+arsc-lib = { group = "io.github.reandroid", name = "ARSCLib", version.ref = "arscLib" }
 apksig = { group = "com.android.tools.build", name = "apksig", version.ref = "apksig" }
 bouncycastle-bcpkix = { group = "org.bouncycastle", name = "bcpkix-jdk18on", version.ref = "bouncycastle" }
 
