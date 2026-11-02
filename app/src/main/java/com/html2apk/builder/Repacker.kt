@@ -19,17 +19,17 @@ import java.util.zip.ZipOutputStream
  * Repacker Level 7.
  *
  * Perubahan dari Level 5/6:
- * - Parameter `htmlFile: File` diganti menjadi `inputFile: File`.
- * - Jika `inputFile` adalah FOLDER (hasil ekstrak ZIP):
- *     • Validasi: `index.html` wajib ada di root folder.
- *     • Iterasi rekursif walkTopDown(), semua file masuk ke `assets/www/<relative_path>`.
- * - Jika `inputFile` adalah FILE tunggal (.html):
- *     • Bungkus sebagai `assets/www/index.html` (sama seperti sebelumnya).
- * - `assets/www/` lama di dalam template APK selalu dihapus dulu sebelum ditambahkan.
- * - Signature lama (META-INF/*.SF/.RSA/.DSA/.EC/MANIFEST.MF) dihapus, lalu sign ulang.
- * - Logika ikon tetap dipertahankan (replace `res/*/ic_launcher.png`).
- * - Manifest & ARSC TIDAK disentuh — template APK sudah memiliki manifest/ARSC final.
- * - Signing memakai `com.android.apksig` (sudah ada sejak Level 6).
+ * - Parameter htmlFile: File diganti menjadi inputFile: File.
+ * - Jika inputFile adalah FOLDER (hasil ekstrak ZIP):
+ *     - Validasi: index.html wajib ada di root folder.
+ *     - Iterasi rekursif walkTopDown(), semua file masuk ke assets/www/<relative_path>.
+ * - Jika inputFile adalah FILE tunggal (.html):
+ *     - Bungkus sebagai assets/www/index.html (sama seperti sebelumnya).
+ * - assets/www/ lama di dalam template APK selalu dihapus dulu sebelum ditambahkan.
+ * - Signature lama di META-INF (MANIFEST.MF, SF, RSA, DSA, EC) dihapus, lalu sign ulang.
+ * - Logika ikon tetap dipertahankan: replace entry ic_launcher.png di folder res/.
+ * - Manifest dan ARSC TIDAK disentuh - template APK sudah memiliki manifest/ARSC final.
+ * - Signing memakai com.android.apksig (sudah ada sejak Level 6).
  */
 class Repacker(private val context: Context) {
 
@@ -38,14 +38,15 @@ class Repacker(private val context: Context) {
         private const val LAUNCHER_ICON_SIZE = 192
     }
 
-    /** Cocok dengan entry ikon launcher standar (`res/mipmap-* / drawable-*/ic_launcher.png`). */
+    // Pola regex untuk entry ikon launcher standar.
+    // Contoh path: res/mipmap-hdpi/ic_launcher.png
     private val iconEntryPattern = Regex("^res/(mipmap|drawable)[^/]*/ic_launcher\\.png$")
 
     /**
      * Repack template APK dengan konten baru + sign ulang.
      *
      * @param inputFile  Bisa berupa FILE (.html) atau FOLDER (hasil ekstrak ZIP).
-     * @return File APK hasil sign (== [outputApk]).
+     * @return File APK hasil sign (== outputApk).
      */
     fun repack(
         templateApk: File,
@@ -60,7 +61,7 @@ class Repacker(private val context: Context) {
         require(templateApk.exists()) { "Template APK tidak ditemukan: ${templateApk.absolutePath}" }
         require(inputFile.exists()) { "Input file/folder tidak ditemukan: ${inputFile.absolutePath}" }
 
-        // Validasi awal sebelum membuka ZIP supaya error jelas & cepat.
+        // Validasi awal sebelum membuka ZIP supaya error jelas dan cepat.
         if (inputFile.isDirectory) {
             val indexHtml = File(inputFile, "index.html")
             if (!indexHtml.exists()) {
@@ -129,7 +130,7 @@ class Repacker(private val context: Context) {
     // Assets writer
     // ------------------------------------------------------------------
 
-    /** File tunggal (.html) → `assets/www/index.html`. */
+    /** File tunggal (.html) menjadi assets/www/index.html. */
     private fun addSingleHtmlToApk(htmlFile: File, zipOut: ZipOutputStream) {
         val entryName = "${ASSETS_WWW_PREFIX}index.html"
         zipOut.putNextEntry(ZipEntry(entryName))
@@ -137,7 +138,7 @@ class Repacker(private val context: Context) {
         zipOut.closeEntry()
     }
 
-    /** Folder hasil ekstrak ZIP → semua file rekursif ke `assets/www/<relative_path>`. */
+    /** Folder hasil ekstrak ZIP: semua file rekursif ke assets/www/<relative_path>. */
     private fun addExtractedDirectoryToApk(rootDir: File, zipOut: ZipOutputStream) {
         // Validasi defensif (sudah divalidasi di awal, tapi tetap dijaga).
         if (!File(rootDir, "index.html").exists()) {
