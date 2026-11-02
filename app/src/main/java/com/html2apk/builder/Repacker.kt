@@ -2,21 +2,18 @@ package com.html2apk.builder
 
 import com.reandroid.apk.ApkModule
 import com.reandroid.archive.FileInputSource
-import com.reandroid.archive.InputSource
 import com.reandroid.arsc.chunk.PackageBlock
 import java.io.File
 
 /**
- * Mesin repack + edit identitas APK (Level 5).
+ * Mesin repack + edit identitas APK (Level 6 - Perbaikan Ikon).
  *
- * Semua operasi ZIP (ganti HTML, ganti ikon, tulis ulang APK) dilakukan
- * sepenuhnya melalui ARSCLib `ApkModule`, sehingga alignment ZIP tetap
- * terjaga dan APK dapat di-install.
+ * Menggunakan ARSCLib `ApkModule` secara penuh untuk menjaga alignment ZIP.
+ * Logika adaptif icon XML dihapus agar Android terpaksa menggunakan file PNG.
  */
 object Repacker {
 
     private const val WWW_INDEX_PATH = "assets/www/index.html"
-    private const val ICON_NAME_FRAGMENT = "ic_launcher"
 
     fun repack(
         templateApk: File,
@@ -71,31 +68,39 @@ object Repacker {
 
             // ── 4. Ganti ikon (jika iconFile != null) ──
             if (iconFile != null && iconFile.exists()) {
-                // Kumpulkan semua nama entry yang mengandung "ic_launcher".
-                val iconEntryNames = mutableListOf<String>()
+                val entriesToRemove = mutableListOf<String>()
+                val pngEntriesToReplace = mutableListOf<String>()
+
+                // Kumpulkan nama entry untuk dihapus atau diganti.
                 val iterator = zipEntryMap.iterator()
                 while (iterator.hasNext()) {
                     val inputSource = iterator.next()
                     val name = inputSource.alias
-                    if (name.contains(ICON_NAME_FRAGMENT, ignoreCase = true) &&
-                        (name.endsWith(".png") || name.endsWith(".xml"))
-                    ) {
-                        iconEntryNames.add(name)
+
+                    // 4a. Hapus semua XML Adaptive Icon agar tidak menimpa PNG.
+                    if (name.startsWith("res/mipmap-anydpi-v26/") && name.endsWith(".xml")) {
+                        entriesToRemove.add(name)
+                    }
+                    // 4b. Cari semua file PNG ikon di folder mipmap.
+                    else if (name.startsWith("res/mipmap-") && 
+                             (name.endsWith("/ic_launcher.png") || name.endsWith("/ic_launcher_round.png"))) {
+                        pngEntriesToReplace.add(name)
                     }
                 }
 
-                // Hapus entry ikon lama.
-                iconEntryNames.forEach { zipEntryMap.remove(it) }
+                // Eksekusi penghapusan XML.
+                entriesToRemove.forEach { zipEntryMap.remove(it) }
 
-                // Tambahkan ikon baru dengan nama yang sama (agar manifest tetap valid).
-                iconEntryNames.forEach { entryName ->
-                    val iconInputSource = FileInputSource(iconFile, entryName)
-                    zipEntryMap.add(iconInputSource)
-                }
-
-                // Jika template tidak memiliki entry ic_launcher sama sekali,
-                // tambahkan setidaknya satu entry default agar ikon terpasang.
-                if (iconEntryNames.isEmpty()) {
+                // Eksekusi penggantian PNG.
+                if (pngEntriesToReplace.isNotEmpty()) {
+                    pngEntriesToReplace.forEach { entryName ->
+                        zipEntryMap.remove(entryName)
+                        // Timpa dengan iconFile baru menggunakan nama entry yang sama.
+                        zipEntryMap.add(FileInputSource(iconFile, entryName))
+                    }
+                } else {
+                    // Fallback jika template tidak memiliki PNG (sangat jarang terjadi).
+                    // Tambahkan setidaknya satu ikon default.
                     val defaultIconPath = "res/mipmap-hdpi-v4/ic_launcher.png"
                     zipEntryMap.add(FileInputSource(iconFile, defaultIconPath))
                 }
