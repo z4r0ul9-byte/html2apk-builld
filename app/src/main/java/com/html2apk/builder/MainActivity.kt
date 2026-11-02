@@ -1,5 +1,6 @@
 package com.html2apk.builder
 
+import android.app.Application
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,7 +22,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.html2apk.builder.data.AppDatabase
 import com.html2apk.builder.ui.BuilderViewModel
 import com.html2apk.builder.ui.screen.BuilderScreen
 import com.html2apk.builder.ui.screen.HistoryScreen
@@ -41,9 +46,20 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MainScreen() {
-    // ViewModel di-scope ke Activity, sehingga state & koneksi Room
-    // bertahan antar tab dan antar rotasi.
-    val viewModel: BuilderViewModel = viewModel()
+    val context = LocalContext.current
+    val application = context.applicationContext as Application
+    val db = AppDatabase.getDatabase(context)
+
+    // PERBAIKAN: Menggunakan ViewModelProvider.Factory untuk menginjeksi historyDao
+    val viewModel: BuilderViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return BuilderViewModel(application, db.historyDao()) as T
+            }
+        }
+    )
+
     var currentTab by remember { mutableIntStateOf(0) }
 
     Scaffold(
