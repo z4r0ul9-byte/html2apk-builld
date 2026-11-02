@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,7 +39,8 @@ import com.html2apk.builder.ui.BuilderViewModel
 @Composable
 fun BuilderScreen(
     viewModel: BuilderViewModel,
-    onBuildComplete: (String) -> Unit = {}
+    onInstallRequest: (String) -> Unit,
+    onShareRequest: (String) -> Unit
 ) {
     val state by viewModel.uiState.collectAsState()
 
@@ -87,11 +90,7 @@ fun BuilderScreen(
                     Button(
                         onClick = {
                             sourceFilePicker.launch(
-                                arrayOf(
-                                    "text/html",
-                                    "application/zip",
-                                    "application/x-zip-compressed"
-                                )
+                                arrayOf("text/html", "application/zip", "application/x-zip-compressed")
                             )
                         },
                         modifier = Modifier.fillMaxWidth()
@@ -113,8 +112,7 @@ fun BuilderScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = if (state.selectedIconUri != null) "Ikon sudah dipilih"
-                        else "Belum ada ikon dipilih",
+                        text = if (state.selectedIconUri != null) "Ikon sudah dipilih" else "Belum ada ikon dipilih",
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Button(
@@ -156,9 +154,7 @@ fun BuilderScreen(
 
             state.errorMessage?.let { error ->
                 Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    ),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -171,9 +167,7 @@ fun BuilderScreen(
 
             state.outputApkPath?.let { path ->
                 Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    ),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -184,17 +178,33 @@ fun BuilderScreen(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Lokasi: $path",
+                            text = "Klik tombol di bawah untuk install atau bagikan.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
                 }
-                Button(
-                    onClick = { onBuildComplete(path) },
-                    modifier = Modifier.fillMaxWidth()
+                
+                // TOMBOL INSTALL DAN SHARE
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Bagikan APK")
+                    Button(
+                        onClick = { onInstallRequest(path) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Install")
+                    }
+                    Button(
+                        onClick = { onShareRequest(path) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary
+                        )
+                    ) {
+                        Text("Bagikan")
+                    }
                 }
             }
         }
