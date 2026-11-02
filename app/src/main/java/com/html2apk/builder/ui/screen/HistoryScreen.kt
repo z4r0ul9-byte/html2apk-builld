@@ -16,17 +16,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.html2apk.builder.data.BuildHistoryDao
+import com.html2apk.builder.ui.BuilderViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * PERBAIKAN: Mengembalikan parameter menjadi viewModel (sesuai pemanggilan di MainActivity.kt).
+ */
 @Composable
 fun HistoryScreen(
-    historyDao: BuildHistoryDao
+    viewModel: BuilderViewModel
 ) {
-    // Perbaikan: historyFlow -> getAllHistory (sesuaikan jika nama fungsi DAO Anda berbeda).
-    val historyList by historyDao.getAllHistory().collectAsState(initial = emptyList())
+    // Mengambil data dari historyFlow yang ada di ViewModel
+    val historyList by viewModel.historyFlow.collectAsState(initial = emptyList())
     val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
 
     Column(
@@ -49,26 +52,24 @@ fun HistoryScreen(
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                // Perbaikan: fileName -> appName
                                 text = item.appName,
                                 fontWeight = FontWeight.Bold,
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                // Perbaikan: packageName (ditambahkan agar informatif)
                                 text = item.packageName,
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
-                                // Perbaikan: outputPath -> apkPath
                                 text = "Path: ${item.apkPath}",
                                 style = MaterialTheme.typography.bodySmall
                             )
                             Text(
-                                // Perbaikan: status
                                 text = "Status: ${item.status}",
                                 style = MaterialTheme.typography.bodySmall
                             )
+                            // Jika Anda ingin menampilkan timestamp, tambahkan baris di bawah ini:
+                            // Text(text = "Waktu: ${dateFormat.format(Date(item.timestamp))}", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
