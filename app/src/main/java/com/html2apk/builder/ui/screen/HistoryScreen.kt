@@ -17,20 +17,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.html2apk.builder.ui.BuilderViewModel
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-/**
- * PERBAIKAN: Mengembalikan parameter menjadi viewModel (sesuai pemanggilan di MainActivity.kt).
- */
 @Composable
 fun HistoryScreen(
     viewModel: BuilderViewModel
 ) {
-    // Mengambil data dari historyFlow yang ada di ViewModel
     val historyList by viewModel.historyFlow.collectAsState(initial = emptyList())
-    val dateFormat = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
 
     Column(
         modifier = Modifier
@@ -68,8 +60,6 @@ fun HistoryScreen(
                                 text = "Status: ${item.status}",
                                 style = MaterialTheme.typography.bodySmall
                             )
-                            // Jika Anda ingin menampilkan timestamp, tambahkan baris di bawah ini:
-                            // Text(text = "Waktu: ${dateFormat.format(Date(item.timestamp))}", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
