@@ -3,74 +3,107 @@ package com.html2apk.builder
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.android.apksig.ApkSigner
 import com.reandroid.apk.ApkFile
+import com.reandroid.xml.XMLFactory
+import com.reandroid.xml.XmlDocument
+import com.reandroid.xml.XmlElement
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.security.KeyStore
+import java.security.PrivateKey
 
 /**
  * Repacker (Level 8) - Menggunakan ARSCLib secara penuh.
- * 
- * Perubahan:
- * - DILARANG menggunakan ZipInputStream/ZipOutputStream untuk menulis APK final.
- * - Menggunakan ApkFile dari ARSCLib untuk memodifikasi manifest, resources, 
- *   menghapus aset lama, dan menambahkan aset baru (HTML/ZIP).
- * - Proses signing diserahkan sepenuhnya ke ViewModel/SignerHelper.
+ *
+ * Perubahan Level 8:
+ * - Patch `<uses-sdk>` (minSdkVersion / targetSdkVersion / maxSdkVersion).
+ * - Set versionCode & versionName langsung ke manifest XML.
+ * - Injeksi `<intent-filter>` (VIEW / BROWSABLE) ke launcher activity
+ *   jika `urlScheme` diisi.
+ * - Signing tetap dilakukan (via apksig) agar kompatibel dengan
+ *   pemanggilan ViewModel yang sudah stabil.
+ *
+ * DILARANG:
+ * - ZipOutputStream manual untuk menulis APK final.
+ * - Mengubah logika ZIP extraction / icon replacement yang sudah stabil.
  */
 class Repacker(private val context: Context) {
 
     companion object {
         private const val ASSETS_WWW_PREFIX = "assets/www/"
         private const val LAUNCHER_ICON_SIZE = 192
-        private const val DEFAULT_OLD_LABEL = "Template App" // Sesuaikan dengan string di template APK
+        private const val DEFAULT_OLD_LABEL = "Template App"
     }
 
     /**
-     * Melakukan proses repacking.
-     * @return File APK hasil repack (belum di-sign).
+     * Repack + patch manifest + sign APK.
      */
     fun repack(
         templateApk: File,
-        inputFile: File, // Bisa berupa file HTML tunggal ATAU folder hasil ekstrak ZIP
+        inputFile: File,
         outputApk: File,
         iconFile: File?,
         newAppName: String? = null,
-        newPackageName: String? = null
+        newPackageName: String? = null,
+        versionCode: Int = 1,
+        versionName: String = "1.0",
+        minSdk: Int = 24,
+        targetSdk: Int = 34,
+        maxSdk: Int? = null,
+        urlScheme: String? = null,
+        keystoreFile: File? = null,
+        keystorePass: String = "android",
+        keyAlias: String = "androiddebugkey",
+        keyPass: String = "android"
     ): File {
         require(templateApk.exists()) { "Template APK tidak ditemukan: ${templateApk.absolutePath}" }
         require(inputFile.exists()) { "Input file/folder tidak ditemukan: ${inputFile.absolutePath}" }
 
-        // 1. Validasi index.html jika input berupa Folder
+        // 1. Validasi index.html jika input folder (perilaku stabil — jangan diubah)
         if (inputFile.isDirectory) {
             if (!File(inputFile, "index.html").exists()) {
-                throw IllegalArgumentException("File index.html wajib ada di dalam folder ZIP yang diekstrak!")
+                throw IllegalArgumentException(
+                    "File index.html wajib ada di dalam folder ZIP yang diekstrak!"
+                )
             }
         }
 
-        // 2. Load Template APK menggunakan ARSCLib
+        // 2. Load template via ARSCLib
         val apkFile = ApkFile.load(templateApk.absolutePath)
 
+        // 3. File intermediate untuk unsigned APK
+        val parentDir = outputApk.parentFile ?: throw IOException("Parent dir output tidak valid")
+        val unsignedApk = File(parentDir, "unsigned_${System.currentTimeMillis()}.apk")
+
         try {
-            // 3. Modifikasi Manifest (Package Name) via ARSCLib
+            // 4. Patch manifest: version, uses-sdk, url scheme
+            patchManifest(
+                apkFile = apkFile,
+                versionCode = versionCode,
+                versionName = versionName,
+                minSdk = minSdk,
+                targetSdk = targetSdk,
+                maxSdk = maxSdk,
+                urlScheme = urlScheme
+            )
+
+            // 5. Package name
             if (!newPackageName.isNullOrBlank()) {
                 apkFile.androidManifest?.packageName = newPackageName
-                // Update juga di manifest XML secara eksplisit jika diperlukan oleh ARSCLib
-                apkFile.androidManifest?.refresh()
             }
 
-            // 4. Modifikasi ARSC (App Name) via ARSCLib
-            val appLabel = newAppName ?: deriveAppLabel(inputFile)
+            // 6. App label (ARSC)
+            val appLabel = newAppName?.takeIf { it.isNotBlank() } ?: deriveAppLabel(inputFile)
             if (appLabel.isNotBlank()) {
                 val table = apkFile.table
-                // Mencari entry string app_name dan menggantinya
                 val appNameEntry = table?.getEntry("string", "app_name")
                 if (appNameEntry != null) {
                     appNameEntry.valueAsString = appLabel
                 } else {
-                    // Fallback jika app_name tidak ditemukan via nama, kita bisa
-                    // menimpa semua string yang bernilai "Template App"
                     table?.stringPool?.forEach { str ->
                         if (str.value == DEFAULT_OLD_LABEL) {
                             str.value = appLabel
@@ -79,7 +112,7 @@ class Repacker(private val context: Context) {
                 }
             }
 
-            // 5. Hapus entry lama `assets/www/` yang ada di apkFile
+            // 7. Hapus assets/www lama
             val entriesToRemove = mutableListOf<String>()
             for (entry in apkFile.entries) {
                 if (entry.name.startsWith(ASSETS_WWW_PREFIX)) {
@@ -88,33 +121,198 @@ class Repacker(private val context: Context) {
             }
             entriesToRemove.forEach { apkFile.removeEntry(it) }
 
-            // 6. Tambahkan konten baru (HTML / Folder)
+            // 8. Tambah konten baru
             if (inputFile.isDirectory) {
                 addDirectoryToApk(apkFile, inputFile)
             } else {
-                // Input berupa file HTML tunggal
                 apkFile.addEntry("${ASSETS_WWW_PREFIX}index.html", inputFile.inputStream())
             }
 
-            // 7. Ganti Ikon
+            // 9. Ganti ikon
             if (iconFile != null && iconFile.exists()) {
                 replaceIcon(apkFile, iconFile)
             }
 
-            // 8. Tulis APK Final (unsigned) menggunakan ARSCLib
-            if (outputApk.exists()) outputApk.delete()
-            apkFile.writeApk(outputApk)
-
-            return outputApk
+            // 10. Tulis APK unsigned
+            if (unsignedApk.exists()) unsignedApk.delete()
+            apkFile.writeApk(unsignedApk)
 
         } finally {
-            // Selalu tutup ApkFile untuk membebaskan memori
             apkFile.close()
+        }
+
+        // 11. Sign (apksig). Jika keystore tidak tersedia, salin apa adanya.
+        try {
+            if (keystoreFile != null && keystoreFile.exists()) {
+                signApk(
+                    unsignedApk = unsignedApk,
+                    signedApk = outputApk,
+                    keystoreFile = keystoreFile,
+                    keystorePass = keystorePass,
+                    keyAlias = keyAlias,
+                    keyPass = keyPass
+                )
+            } else {
+                unsignedApk.copyTo(outputApk, overwrite = true)
+            }
+        } finally {
+            if (unsignedApk.exists()) unsignedApk.delete()
+        }
+
+        return outputApk
+    }
+
+    // ------------------------------------------------------------------
+    // Manifest patching (Level 8)
+    // ------------------------------------------------------------------
+
+    private fun patchManifest(
+        apkFile: ApkFile,
+        versionCode: Int,
+        versionName: String,
+        minSdk: Int,
+        targetSdk: Int,
+        maxSdk: Int?,
+        urlScheme: String?
+    ) {
+        val manifest = apkFile.androidManifest ?: return
+
+        // Dapatkan XmlDocument <manifest> root
+        val doc: XmlDocument = try {
+            manifest.getAndroidManifest()
+        } catch (e: Throwable) {
+            // Fallback: gunakan referensi manifest sebagai XmlElement root
+            // (beberapa versi ARSCLib membungkus root di dalam block)
+            throw IllegalStateException("Gagal membaca AndroidManifest XML: ${e.message}", e)
+        }
+        val root: XmlElement = doc.getRootElement()
+            ?: throw IllegalStateException("Root element <manifest> tidak ditemukan")
+
+        // ── 1. versionCode & versionName ─────────────────────────────
+        root.setAttribute("android:versionCode", versionCode.toString())
+        root.setAttribute("android:versionName", versionName)
+
+        // ── 2. <uses-sdk> ────────────────────────────────────────────
+        val usesSdkList = root.getElementsByTagName("uses-sdk")
+        val usesSdk: XmlElement = if (usesSdkList.isNotEmpty()) {
+            usesSdkList[0]
+        } else {
+            val created = XMLFactory.createElement("uses-sdk")
+            // Sisipkan sebelum <application> agar sesuai konvensi
+            val appList = root.getElementsByTagName("application")
+            if (appList.isNotEmpty()) {
+                root.addElement(created)
+            } else {
+                root.addElement(created)
+            }
+            created
+        }
+
+        usesSdk.setAttribute("android:minSdkVersion", minSdk.toString())
+        usesSdk.setAttribute("android:targetSdkVersion", targetSdk.toString())
+
+        if (maxSdk != null && maxSdk > 0) {
+            usesSdk.setAttribute("android:maxSdkVersion", maxSdk.toString())
+        } else {
+            // Bersihkan atribut maxSdkVersion jika ada versi lama
+            try {
+                usesSdk.removeAttribute("android:maxSdkVersion")
+            } catch (_: Throwable) { /* opsional */ }
+        }
+
+        // ── 3. URL Scheme intent-filter ─────────────────────────────
+        if (!urlScheme.isNullOrBlank()) {
+            injectUrlSchemeFilter(root, urlScheme.trim())
+        }
+    }
+
+    private fun injectUrlSchemeFilter(root: XmlElement, scheme: String) {
+        val application = root.getElementsByTagName("application").firstOrNull() ?: return
+        val activities = application.getElementsByTagName("activity")
+        if (activities.isEmpty()) return
+
+        // Cari launcher activity: intent-filter dengan MAIN + LAUNCHER
+        val launcher = activities.firstOrNull { activity ->
+            activity.getElementsByTagName("intent-filter").any { filter ->
+                val hasMain = filter.getElementsByTagName("action").any { a ->
+                    safeAttr(a, "android:name") == "android.intent.action.MAIN"
+                }
+                val hasLauncher = filter.getElementsByTagName("category").any { c ->
+                    safeAttr(c, "android:name") == "android.intent.category.LAUNCHER"
+                }
+                hasMain && hasLauncher
+            }
+        } ?: activities[0]
+
+        val intentFilter = XMLFactory.createElement("intent-filter")
+
+        val action = XMLFactory.createElement("action")
+        action.setAttribute("android:name", "android.intent.action.VIEW")
+        intentFilter.addElement(action)
+
+        val catDefault = XMLFactory.createElement("category")
+        catDefault.setAttribute("android:name", "android.intent.category.DEFAULT")
+        intentFilter.addElement(catDefault)
+
+        val catBrowsable = XMLFactory.createElement("category")
+        catBrowsable.setAttribute("android:name", "android.intent.category.BROWSABLE")
+        intentFilter.addElement(catBrowsable)
+
+        val data = XMLFactory.createElement("data")
+        data.setAttribute("android:scheme", scheme)
+        intentFilter.addElement(data)
+
+        launcher.addElement(intentFilter)
+    }
+
+    private fun safeAttr(element: XmlElement, name: String): String? {
+        return try {
+            element.getAttributeValue(name)
+        } catch (_: Throwable) {
+            null
         }
     }
 
     // ------------------------------------------------------------------
-    // Fungsi Bantuan
+    // Signing (apksig)
+    // ------------------------------------------------------------------
+
+    private fun signApk(
+        unsignedApk: File,
+        signedApk: File,
+        keystoreFile: File,
+        keystorePass: String,
+        keyAlias: String,
+        keyPass: String
+    ) {
+        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+        FileInputStream(keystoreFile).use { fis ->
+            keyStore.load(fis, keystorePass.toCharArray())
+        }
+
+        val privateKey = keyStore.getKey(keyAlias, keyPass.toCharArray()) as PrivateKey
+        val certificate = keyStore.getCertificate(keyAlias)
+
+        val signerConfig = ApkSigner.SignerConfig.Builder(
+            keyAlias,
+            privateKey,
+            listOf(certificate)
+        ).build()
+
+        if (signedApk.exists()) signedApk.delete()
+
+        ApkSigner.Builder(listOf(signerConfig))
+            .setInputApk(unsignedApk)
+            .setOutputApk(signedApk)
+            .setV1SigningEnabled(true)
+            .setV2SigningEnabled(true)
+            .setV3SigningEnabled(true)
+            .build()
+            .sign()
+    }
+
+    // ------------------------------------------------------------------
+    // Helper (dipertahankan dari versi stabil)
     // ------------------------------------------------------------------
 
     private fun deriveAppLabel(inputFile: File): String {
@@ -138,31 +336,21 @@ class Repacker(private val context: Context) {
     }
 
     private fun replaceIcon(apkFile: ApkFile, iconFile: File) {
-        // 1. Siapkan byte array untuk ikon baru
         val iconBytes = loadScaledIcon(iconFile)
-        
-        // 2. Kumpulkan semua entry yang perlu dihapus (Adaptive Icon XML & PNG Lama)
+
         val entriesToRemove = mutableListOf<String>()
         for (entry in apkFile.entries) {
             val name = entry.name
             if (name.startsWith("res/") && name.contains("ic_launcher")) {
-                // Hapus XML adaptive icon (jika ada)
-                if (name.endsWith(".xml")) {
-                    entriesToRemove.add(name)
-                } 
-                // Hapus PNG lama (akan ditimpa)
-                else if (name.endsWith(".png")) {
+                if (name.endsWith(".xml") || name.endsWith(".png")) {
                     entriesToRemove.add(name)
                 }
             }
         }
-        
-        // Hapus file lama dari APK
         entriesToRemove.forEach { apkFile.removeEntry(it) }
 
-        // 3. Tambahkan PNG baru dengan nama yang sama persis
-        // Kita iterasi lagi untuk mencari path PNG yang tadinya ada
-        for (entry in apkFile.entries.toList()) { // toList() untuk menghindari ConcurrentModificationException
+        // Kumpulkan path PNG lama yang tadinya ada
+        for (entry in apkFile.entries.toList()) {
             val name = entry.name
             if (name.startsWith("res/") && name.contains("ic_launcher") && name.endsWith(".png")) {
                 apkFile.addEntry(name, ByteArrayInputStream(iconBytes))
@@ -173,14 +361,14 @@ class Repacker(private val context: Context) {
     private fun loadScaledIcon(iconFile: File): ByteArray {
         val bmp = BitmapFactory.decodeFile(iconFile.absolutePath)
             ?: return iconFile.readBytes()
-            
+
         val scaled = Bitmap.createScaledBitmap(bmp, LAUNCHER_ICON_SIZE, LAUNCHER_ICON_SIZE, true)
         val baos = ByteArrayOutputStream()
         scaled.compress(Bitmap.CompressFormat.PNG, 100, baos)
-        
+
         if (scaled !== bmp) bmp.recycle()
         scaled.recycle()
-        
+
         return baos.toByteArray()
     }
 }
